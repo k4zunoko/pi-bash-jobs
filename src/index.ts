@@ -10,15 +10,15 @@
  * it interrupts a running agent after the current tool batch, or starts a new turn when idle.
  */
 
-import type { ExtensionAPI, ExtensionContext, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
-import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
+import type { BashToolDetails, ExtensionAPI, ExtensionContext, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const MESSAGE_TYPE = "bash-jobs";
 const STATUS_KEY = "bash-jobs";
+const TUI_CAPTURE_KEY = "bash-jobs:tui";
 const KILL_WAIT_MS = 5_000;
-const PREVIEW_LINES = 8;
 
 type JobStatus = "done" | "failed" | "killed";
 
@@ -27,12 +27,13 @@ interface JobOutcome {
 	exitCode?: number;
 	text: string;
 	durationMs: number;
-	fullOutputPath?: string;
+	bashDetails?: BashToolDetails;
 }
 
 interface Job {
 	id: string;
 	command: string;
+	timeout?: number;
 	startedAt: number;
 	controller: AbortController;
 	done: Promise<JobOutcome>;
@@ -45,10 +46,12 @@ interface Job {
 export interface BashJobMessageDetails {
 	id: string;
 	command: string;
+	timeout?: number;
 	status: JobStatus;
 	exitCode?: number;
 	durationMs: number;
-	fullOutputPath?: string;
+	/** Bash tool details (truncation, full output path), used to render like a bash tool result. */
+	bashDetails?: BashToolDetails;
 }
 
 const formatDuration = (ms: number) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`);
@@ -70,6 +73,8 @@ export default function bashJobs(pi: ExtensionAPI) {
 	const jobs = new Map<string, Job>();
 	let seq = 0;
 	let uiCtx: ExtensionContext | undefined;
+	/** The interactive TUI, captured so completion cards can repaint themselves like live tool rows. */
+	let tui: TUI | undefined;
 
 	const safeUi = (fn: (ctx: ExtensionContext) => void) => {
 		if (!uiCtx?.hasUI) return;
@@ -98,7 +103,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 				exitCode,
 				text,
 				durationMs: Date.now() - job.startedAt,
-				fullOutputPath: result.details?.fullOutputPath,
+				bashDetails: result.details,
 			};
 		} catch (err) {
 			// Timeouts, aborts and spawn errors are thrown by the bash tool with the output tail in the message.
@@ -116,10 +121,11 @@ export default function bashJobs(pi: ExtensionAPI) {
 		const details: BashJobMessageDetails = {
 			id: job.id,
 			command: job.command,
+			timeout: job.timeout,
 			status: outcome.status,
 			exitCode: outcome.exitCode,
 			durationMs: outcome.durationMs,
-			fullOutputPath: outcome.fullOutputPath,
+			bashDetails: outcome.bashDetails,
 		};
 		// A user kill is recorded for the agent's context without waking it up.
 		const options = job.killedBy === "user" ? { triggerTurn: false } : { triggerTurn: true, deliverAs: "steer" as const };
@@ -127,13 +133,13 @@ export default function bashJobs(pi: ExtensionAPI) {
 			{ customType: MESSAGE_TYPE, content: `${header}\n\n${outcome.text}`, display: true, details },
 			options,
 		);
-		safeUi((ctx) => ctx.ui.notify(header, outcome.status === "done" ? "info" : "warning"));
 	}
 
 	function start(params: { command: string; timeout?: number }, ctx: ExtensionToolContext): Job {
 		const job = {
 			id: `job-${++seq}`,
 			command: params.command,
+			timeout: params.timeout,
 			startedAt: Date.now(),
 			controller: new AbortController(),
 		} as Job;
@@ -238,30 +244,48 @@ export default function bashJobs(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerMessageRenderer<BashJobMessageDetails>(MESSAGE_TYPE, (message, { expanded, outputPad }, theme) => {
+	// Draw the completion as a finished `bash` tool row: pi's own ToolExecutionComponent with the bash
+	// tool's renderers. Display extensions that restyle bash tool rows apply to it as well.
+	pi.registerMessageRenderer<BashJobMessageDetails>(MESSAGE_TYPE, (message, { expanded, outputPad }) => {
+		const d = message.details;
+		if (!d) return undefined;
 		const raw =
 			typeof message.content === "string"
 				? message.content
 				: message.content.map((c) => (c.type === "text" ? c.text : "")).join("");
-		const [header = "", ...rest] = raw.split("\n");
-		const body = rest.join("\n").replace(/^\n+/, "").trimEnd();
-		const status = message.details?.status ?? "done";
-		const color = status === "done" ? "success" : status === "killed" ? "warning" : "error";
-
-		let text = theme.fg(color, theme.bold(header));
-		if (body) {
-			const lines = body.split("\n");
-			const shown = expanded ? lines : lines.slice(-PREVIEW_LINES);
-			if (shown.length < lines.length) text += `\n${theme.fg("dim", `… ${lines.length - shown.length} more lines (expand to show)`)}`;
-			text += `\n${theme.fg("toolOutput", shown.join("\n"))}`;
-		}
-		const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
-		box.addChild(new Text(text, 0, 0));
-		return box;
+		// The model-facing content is "<header>\n\n<bash output>"; the row shows only the bash output.
+		const output = raw.slice(raw.indexOf("\n\n") + 2);
+		const ui = tui ?? ({ requestRender() {} } as unknown as TUI);
+		const row = new ToolExecutionComponent(
+			"bash",
+			`${MESSAGE_TYPE}:${d.id}`,
+			{ command: d.command, timeout: d.timeout },
+			{ outputPad },
+			bash, // only its renderCall/renderResult are used
+			ui,
+			process.cwd(),
+		);
+		row.setArgsComplete();
+		row.updateResult({
+			content: [{ type: "text", text: output }],
+			details: d.bashDetails,
+			isError: d.status !== "done",
+			durationMs: d.durationMs,
+		});
+		row.setExpanded(expanded);
+		return row;
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		uiCtx = ctx;
+		if (ctx.mode === "tui") {
+			// The widget factory runs synchronously and receives the TUI; remove the widget right away.
+			ctx.ui.setWidget(TUI_CAPTURE_KEY, (t) => {
+				tui = t;
+				return { render: () => [], invalidate() {} };
+			});
+			ctx.ui.setWidget(TUI_CAPTURE_KEY, undefined);
+		}
 		updateStatus();
 	});
 
@@ -273,5 +297,6 @@ export default function bashJobs(pi: ExtensionAPI) {
 		jobs.clear();
 		updateStatus();
 		uiCtx = undefined;
+		tui = undefined;
 	});
 }

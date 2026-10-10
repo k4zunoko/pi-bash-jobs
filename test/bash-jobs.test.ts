@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import bashJobs, { type BashJobMessageDetails } from "../src/index.ts";
 
 interface Sent {
@@ -9,13 +10,14 @@ interface Sent {
 
 function setup() {
 	const tools = new Map<string, any>();
+	const renderers = new Map<string, any>();
 	const handlers = new Map<string, Function>();
 	const sent: Sent[] = [];
 	const waiters: Array<() => void> = [];
 	const pi = {
 		registerTool: (t: any) => tools.set(t.name, t),
 		registerCommand: () => {},
-		registerMessageRenderer: () => {},
+		registerMessageRenderer: (type: string, r: any) => renderers.set(type, r),
 		on: (name: string, fn: Function) => handlers.set(name, fn),
 		sendMessage: (message: any, options: unknown) => {
 			sent.push({ message, options });
@@ -31,7 +33,7 @@ function setup() {
 	};
 	const call = (name: string, args: unknown) => tools.get(name).execute("call-1", args, undefined, undefined, ctx);
 	const nextMessage = () => new Promise<Sent>((resolve) => waiters.push(() => resolve(sent[sent.length - 1]!)));
-	return { call, sent, nextMessage, handlers };
+	return { call, sent, nextMessage, handlers, renderers };
 }
 
 const text = (r: any) => r.content.map((c: any) => c.text).join("");
@@ -92,4 +94,19 @@ test("session_shutdown aborts jobs silently", async () => {
 	handlers.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" });
 	await new Promise((r) => setTimeout(r, 1500));
 	assert.equal(sent.length, 0);
+});
+
+test("renders the completion as a bash tool row", async () => {
+	initTheme("dark");
+	const { call, nextMessage, renderers } = setup();
+	await call("bash_job", { command: "echo render-me; exit 2" });
+	const { message } = await nextMessage();
+	const row = renderers.get("bash-jobs")(message, { expanded: false, outputPad: 1 });
+	// eslint-disable-next-line no-control-regex
+	const lines = row.render(80).map((l: string) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+	assert.ok(lines.includes(" $ echo render-me; exit 2"));
+	assert.ok(lines.includes(" render-me"));
+	assert.ok(lines.includes(" Command exited with code 2"));
+	assert.ok(lines.some((l: string) => /^ Took \d/.test(l)));
+	assert.ok(!lines.some((l: string) => l.includes("Background job")));
 });
