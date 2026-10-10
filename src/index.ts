@@ -170,7 +170,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 
 	pi.registerTool({
 		name: "bash_job",
-		label: "Bash Job",
+		label: "Job",
 		description:
 			"Start a bash command as a background job and return its job id immediately. " +
 			"When the command finishes, its output (truncated like the bash tool) arrives as a message that interrupts your current work. " +
@@ -199,7 +199,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 
 	pi.registerTool({
 		name: "bash_job_kill",
-		label: "Bash Job Kill",
+		label: "Kill Job",
 		description: "Kill a running background job started with bash_job (including its child processes) and return its output so far.",
 		parameters: Type.Object({
 			id: Type.String({ description: "Job id returned by bash_job, e.g. job-1" }),
@@ -246,16 +246,16 @@ export default function bashJobs(pi: ExtensionAPI) {
 
 	// Draw the completion as a finished `bash` tool row: pi's own ToolExecutionComponent with the bash
 	// tool's renderers. Display extensions that restyle bash tool rows apply to it as well.
-	// The "Bash Job" label (used as the row title by display extensions) and the job suffix in pi's
+	// The "Job" label (used as the row title by display extensions) and the job suffix in pi's
 	// default call line tell it apart from a foreground bash call. Created once so per-definition caches hit.
 	const completionRow = {
 		...bash,
-		label: "Bash Job",
+		label: "Job",
 		renderCall(rawArgs: unknown, theme: Theme, context: { lastComponent?: unknown }) {
 			const args = rawArgs as { command: string; timeout?: number; job?: string };
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			const timeout = args.timeout ? theme.fg("muted", ` (timeout ${args.timeout}s)`) : "";
-			const job = args.job ? theme.fg("muted", ` · background ${args.job}`) : "";
+			const job = args.job ? theme.fg("muted", ` · ${args.job}`) : "";
 			text.setText(theme.fg("toolTitle", theme.bold(`$ ${args.command}`)) + timeout + job);
 			return text;
 		},
