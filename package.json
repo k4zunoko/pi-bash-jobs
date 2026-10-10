@@ -1,0 +1,44 @@
+{
+  "name": "pi-bash-jobs",
+  "version": "0.1.0",
+  "description": "Run bash commands as background jobs in pi and get interrupted when they finish, reusing pi's built-in bash tool.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "k4zunoko",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k4zunoko/pi-bash-jobs.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "bash",
+    "background",
+    "jobs"
+  ],
+  "files": [
+    "src"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.1.0",
+    "@earendil-works/pi-tui": "^1.1.0",
+    "@types/node": "^24.0.0",
+    "typebox": "^1.3.27",
+    "typescript": "^5.9.3"
+  }
+}
