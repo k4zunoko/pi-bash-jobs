@@ -41,7 +41,7 @@ const text = (r: any) => r.content.map((c: any) => c.text).join("");
 test("returns immediately and steers the completion message", async () => {
 	const { call, nextMessage } = setup();
 	const started = Date.now();
-	const r = await call("bash_job", { command: "sleep 1; echo hello-job" });
+	const r = await call("job", { command: "sleep 1; echo hello-job" });
 	assert.ok(Date.now() - started < 900, "tool should not wait for the command");
 	assert.match(text(r), /Started background job job-1/);
 
@@ -56,7 +56,7 @@ test("returns immediately and steers the completion message", async () => {
 
 test("reports a non-zero exit as failed", async () => {
 	const { call, nextMessage } = setup();
-	await call("bash_job", { command: "echo oops; exit 3" });
+	await call("job", { command: "echo oops; exit 3" });
 	const { message } = await nextMessage();
 	assert.equal(message.details.status, "failed");
 	assert.equal(message.details.exitCode, 3);
@@ -66,29 +66,29 @@ test("reports a non-zero exit as failed", async () => {
 
 test("reports a timeout as failed", async () => {
 	const { call, nextMessage } = setup();
-	await call("bash_job", { command: "sleep 10", timeout: 1 });
+	await call("job", { command: "sleep 10", timeout: 1 });
 	const { message } = await nextMessage();
 	assert.equal(message.details.status, "failed");
 	assert.match(message.content, /timed out after 1 seconds/);
 });
 
-test("bash_job_kill stops the job without a completion message", async () => {
+test("kill_job stops the job without a completion message", async () => {
 	const { call, sent } = setup();
-	await call("bash_job", { command: "echo before-kill; sleep 30" });
+	await call("job", { command: "echo before-kill; sleep 30" });
 	await new Promise((r) => setTimeout(r, 500));
 	const started = Date.now();
-	const r = await call("bash_job_kill", { id: "job-1" });
+	const r = await call("kill_job", { id: "job-1" });
 	assert.ok(Date.now() - started < 5000);
 	assert.match(text(r), /job-1 was killed/);
 	assert.match(text(r), /before-kill/);
 	await new Promise((r) => setTimeout(r, 200));
 	assert.equal(sent.length, 0);
-	await assert.rejects(call("bash_job_kill", { id: "job-1" }), /No running job/);
+	await assert.rejects(call("kill_job", { id: "job-1" }), /No running job/);
 });
 
 test("session_shutdown aborts jobs silently", async () => {
 	const { call, sent, handlers } = setup();
-	await call("bash_job", { command: "sleep 30" });
+	await call("job", { command: "sleep 30" });
 	// Give Git Bash time to spawn the child; an immediate abort can orphan it on Windows (pi core behavior).
 	await new Promise((r) => setTimeout(r, 500));
 	handlers.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" });
@@ -99,7 +99,7 @@ test("session_shutdown aborts jobs silently", async () => {
 test("renders the completion as a bash tool row", async () => {
 	initTheme("dark");
 	const { call, nextMessage, renderers } = setup();
-	await call("bash_job", { command: "echo render-me; exit 2" });
+	await call("job", { command: "echo render-me; exit 2" });
 	const { message } = await nextMessage();
 	const row = renderers.get("bash-jobs")(message, { expanded: false, outputPad: 1 });
 	// eslint-disable-next-line no-control-regex

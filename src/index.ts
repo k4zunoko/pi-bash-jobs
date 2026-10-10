@@ -86,7 +86,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 	};
 
 	const updateStatus = () =>
-		safeUi((ctx) => ctx.ui.setStatus(STATUS_KEY, jobs.size > 0 ? `bash jobs: ${jobs.size} running` : undefined));
+		safeUi((ctx) => ctx.ui.setStatus(STATUS_KEY, jobs.size > 0 ? `jobs: ${jobs.size} running` : undefined));
 
 	const listRunning = () =>
 		jobs.size === 0
@@ -169,7 +169,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 	}
 
 	pi.registerTool({
-		name: "bash_job",
+		name: "job",
 		label: "Job",
 		description:
 			"Start a bash command as a background job and return its job id immediately. " +
@@ -178,8 +178,8 @@ export default function bashJobs(pi: ExtensionAPI) {
 			"Not for servers or watchers that never exit. Optionally provide a timeout in seconds.",
 		promptSnippet: "Run a long bash command in the background; you are notified when it finishes",
 		promptGuidelines: [
-			"Use bash_job for builds, test suites and other slow commands, then keep working on something else; do not sleep or poll to wait for the job.",
-			"Use bash_job_kill to stop a background job you no longer need.",
+			"Use the job tool for builds, test suites and other slow commands, then keep working on something else; do not sleep or poll to wait for the job.",
+			"Use kill_job to stop a background job you no longer need.",
 		],
 		parameters: bash.parameters,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -198,11 +198,11 @@ export default function bashJobs(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "bash_job_kill",
+		name: "kill_job",
 		label: "Kill Job",
-		description: "Kill a running background job started with bash_job (including its child processes) and return its output so far.",
+		description: "Kill a running background job started with the job tool (including its child processes) and return its output so far.",
 		parameters: Type.Object({
-			id: Type.String({ description: "Job id returned by bash_job, e.g. job-1" }),
+			id: Type.String({ description: "Job id returned by the job tool, e.g. job-1" }),
 		}),
 		async execute(_toolCallId, { id }, _signal, _onUpdate, ctx) {
 			uiCtx = ctx;
@@ -216,8 +216,8 @@ export default function bashJobs(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("bash-jobs", {
-		description: "List background bash jobs, or kill one: /bash-jobs [kill <id>|all]",
+	pi.registerCommand("jobs", {
+		description: "List background bash jobs, or kill one: /jobs [kill <id>|all]",
 		getArgumentCompletions: (prefix) => {
 			const items = [{ value: "kill all", label: "kill all" }, ...[...jobs.keys()].map((id) => ({ value: `kill ${id}`, label: `kill ${id}` }))];
 			const matches = items.filter((i) => i.value.startsWith(prefix.trim()));
@@ -231,7 +231,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 				return;
 			}
 			if (sub !== "kill" || !target) {
-				ctx.ui.notify("Usage: /bash-jobs [kill <id>|all]", "warning");
+				ctx.ui.notify("Usage: /jobs [kill <id>|all]", "warning");
 				return;
 			}
 			const targets = target === "all" ? [...jobs.values()] : [jobs.get(target)].filter((j): j is Job => !!j);
