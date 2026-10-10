@@ -42,7 +42,7 @@ A local package is loaded in place; edit and run `/reload` to apply changes.
 - All jobs are killed silently when the session shuts down, reloads, or is replaced.
 - Extensions that guard the tool named `bash` (permission gates, confirmations) do not see `bash_job`; add it to them if needed.
 - The settings `shellPath` is not read; the default shell resolution of pi is used.
-- On Windows, aborting a job immediately after starting it can orphan the child process (a race in pi's `taskkill /T` path that also affects the built-in bash tool).
+- On Windows with Git Bash, killing a job can leave its child processes running (for example `sleep.exe`). MSYS starts children through intermediate processes that exit, so pi's `taskkill /T` cannot reach them. The built-in bash tool shares this behavior when aborted. Jobs that run to completion are not affected.
 
 ## Development
 
