@@ -10,9 +10,9 @@
  * it interrupts a running agent after the current tool batch, or starts a new turn when idle.
  */
 
-import type { BashToolDetails, ExtensionAPI, ExtensionContext, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import type { BashToolDetails, ExtensionAPI, ExtensionContext, ExtensionToolContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
+import { Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const MESSAGE_TYPE = "bash-jobs";
@@ -246,6 +246,20 @@ export default function bashJobs(pi: ExtensionAPI) {
 
 	// Draw the completion as a finished `bash` tool row: pi's own ToolExecutionComponent with the bash
 	// tool's renderers. Display extensions that restyle bash tool rows apply to it as well.
+	// The "Bash Job" label (used as the row title by display extensions) and the job suffix in pi's
+	// default call line tell it apart from a foreground bash call. Created once so per-definition caches hit.
+	const completionRow = {
+		...bash,
+		label: "Bash Job",
+		renderCall(rawArgs: unknown, theme: Theme, context: { lastComponent?: unknown }) {
+			const args = rawArgs as { command: string; timeout?: number; job?: string };
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const timeout = args.timeout ? theme.fg("muted", ` (timeout ${args.timeout}s)`) : "";
+			const job = args.job ? theme.fg("muted", ` · background ${args.job}`) : "";
+			text.setText(theme.fg("toolTitle", theme.bold(`$ ${args.command}`)) + timeout + job);
+			return text;
+		},
+	} as unknown as ToolDefinition;
 	pi.registerMessageRenderer<BashJobMessageDetails>(MESSAGE_TYPE, (message, { expanded, outputPad }) => {
 		const d = message.details;
 		if (!d) return undefined;
@@ -259,9 +273,9 @@ export default function bashJobs(pi: ExtensionAPI) {
 		const row = new ToolExecutionComponent(
 			"bash",
 			`${MESSAGE_TYPE}:${d.id}`,
-			{ command: d.command, timeout: d.timeout },
+			{ command: d.command, timeout: d.timeout, job: d.id },
 			{ outputPad },
-			bash, // only its renderCall/renderResult are used
+			completionRow,
 			ui,
 			process.cwd(),
 		);

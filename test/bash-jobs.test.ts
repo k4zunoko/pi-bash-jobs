@@ -104,7 +104,7 @@ test("renders the completion as a bash tool row", async () => {
 	const row = renderers.get("bash-jobs")(message, { expanded: false, outputPad: 1 });
 	// eslint-disable-next-line no-control-regex
 	const lines = row.render(80).map((l: string) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
-	assert.ok(lines.includes(" $ echo render-me; exit 2"));
+	assert.ok(lines.includes(" $ echo render-me; exit 2 · background job-1"));
 	assert.ok(lines.includes(" render-me"));
 	assert.ok(lines.includes(" Command exited with code 2"));
 	assert.ok(lines.some((l: string) => /^ Took \d/.test(l)));
