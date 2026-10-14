@@ -92,16 +92,21 @@ test("jobs shows the output of a running job so far (real bash)", async () => {
 	const started = marker();
 	const { call } = setup();
 	await call("job", { command: `echo progress-1; echo progress-2; : > "${bashPath(started)}"; ${BUSY_LOOP}` });
-	await waitFor(() => existsSync(started), "the job to start");
-	// The bash tool sends its output in throttled updates; poll (bounded) for the one with both lines.
-	let shown = "";
-	const deadline = Date.now() + 10_000;
-	while (!shown.includes("progress-2") && Date.now() < deadline) {
-		shown = text(await call("jobs", { id: "job-1" }));
-		if (!shown.includes("progress-2")) await new Promise((r) => setTimeout(r, 20));
+	try {
+		await waitFor(() => existsSync(started), "the job to start");
+		// The bash tool sends its output in throttled updates; poll (bounded) for the one with both lines.
+		// (The command line itself also contains "progress-2", so look for it as an output line.)
+		let shown = "";
+		const deadline = Date.now() + 10_000;
+		while (!shown.endsWith("\nprogress-2") && Date.now() < deadline) {
+			shown = text(await call("jobs", { id: "job-1" }));
+			if (!shown.endsWith("\nprogress-2")) await new Promise((r) => setTimeout(r, 20));
+		}
+		assert.match(shown, /^job-1 \(\d+\.\ds\): echo progress-1; .*\nOutput so far \(last 20 lines\):\nprogress-1\nprogress-2$/);
+	} finally {
+		// Also when an assertion fails, so the looping shell does not keep the test process alive.
+		await call("kill_job", { id: "job-1" });
 	}
-	assert.match(shown, /^job-1 \(\d+\.\ds\): echo progress-1; .*\nOutput so far \(last 20 lines\):\nprogress-1\nprogress-2$/);
-	await call("kill_job", { id: "job-1" });
 });
 
 test("session_shutdown kills running jobs, waits for them to exit and records them", async () => {
