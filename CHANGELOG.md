@@ -10,7 +10,8 @@ All notable changes to this project are documented here. The format is based on
 
 - `createBashJobs({ createBashTool, killWaitMs })` builds the extension with an injected bash tool definition and kill wait; the default export uses pi's bash tool. Tests use it to simulate processes that do not exit or fail to spawn.
 - Tests for the `/jobs` command, user kills, the footer status, `session_start`, startup errors and concurrent jobs. Tests wait on events or poll with a deadline instead of sleeping a fixed time.
-- `reason` in the completion message details (`exit`, `timeout`, `aborted`, `error`). A timeout reads `timed out after … (timeout Ns)` instead of `failed`.
+- End-to-end tests with a real pi session runtime and a faux model (`test/e2e-harness.ts`).
+- `reason` in the completion message details (`exit`, `timeout`, `aborted`, `error`, `interrupted`). A timeout reads `timed out after … (timeout Ns)` instead of `failed`.
 - The completion message format is documented in the README.
 
 ### Fixed
@@ -19,6 +20,9 @@ All notable changes to this project are documented here. The format is based on
 - Durations carry over rounded seconds and show hours (`59.96s` is `1m0s`, not `60.0s`; `2h0m0s`, not `120m0s`).
 - Jobs that time out or are killed after their output was truncated keep the truncation details, so the completion row shows the full output path and the truncation warning.
 - A job that does not exit within the 5s kill wait is no longer lost: it is listed and counted as `killing` (`/jobs`, footer), and its output is recorded in the conversation (without waking the agent) when it exits. `kill_job` returns an error result with `details.exited: false` in that case, and `details.exited`, `status`, `reason` and `exitCode` otherwise. `/jobs kill` reports `Killed` only for jobs that exited and warns about the others.
+- Quitting, `/reload` and switching sessions no longer drop running jobs silently: each one is killed, pi waits up to 5s in total for them to exit, and the conversation of the session that ran it gets one `interrupted` message with the output so far. A model that resumes the conversation no longer waits for a result that never comes.
+- Job ids continue after the highest id in the branch when a new runtime starts (reload, resume), so ids are not reused within a conversation.
+- A failing completion message (for example from a stale runtime) no longer causes an unhandled promise rejection.
 
 ## [0.2.0] - 2026-10-14
 

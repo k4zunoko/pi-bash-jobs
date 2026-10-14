@@ -17,6 +17,8 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionToolContext,
+	SessionEntry,
+	SessionShutdownEvent,
 	Theme,
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -28,14 +30,17 @@ const MESSAGE_TYPE = "bash-jobs";
 const STATUS_KEY = "bash-jobs";
 const TUI_CAPTURE_KEY = "bash-jobs:tui";
 const KILL_WAIT_MS = 5_000;
+/** Tools whose results carry a job id in `details.id`. */
+const JOB_TOOLS = new Set(["job", "kill_job"]);
 
 type JobStatus = "done" | "failed" | "killed";
 
 /**
  * Why a job ended: the command exited (`exit`, with an exit code), hit its `timeout`, was killed
- * (`aborted`), or could not run or was ended otherwise (`error`, for example a spawn failure).
+ * (`aborted`), could not run or was ended otherwise (`error`, for example a spawn failure), or was
+ * killed because the session shut down, reloaded or was replaced (`interrupted`).
  */
-export type JobEndReason = "exit" | "timeout" | "aborted" | "error";
+export type JobEndReason = "exit" | "timeout" | "aborted" | "error" | "interrupted";
 
 interface JobOutcome {
 	status: JobStatus;
@@ -268,11 +273,15 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		job.done = run(job, params, ctx);
 		jobs.set(job.id, job);
 		updateStatus();
-		void job.done.then((outcome) => {
-			jobs.delete(job.id);
-			updateStatus();
-			report(job, outcome);
-		});
+		void job.done
+			.then((outcome) => {
+				jobs.delete(job.id);
+				updateStatus();
+				report(job, outcome);
+			})
+			.catch(() => {
+				// sendMessage throws once the runtime is stale; the job is already cleaned up above.
+			});
 		return job;
 	}
 
@@ -449,6 +458,9 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 
 	pi.on("session_start", (_event, ctx) => {
 		uiCtx = ctx;
+		// Each runtime (after reload, resume, new or fork) starts with a fresh counter; continue after
+		// the ids already in this branch so old and new jobs never share an id.
+		seq = Math.max(seq, lastJobNumber(ctx.sessionManager.getBranch()));
 		if (ctx.mode === "tui") {
 			// The widget factory runs synchronously and receives the TUI; remove the widget right away.
 			ctx.ui.setWidget(TUI_CAPTURE_KEY, (t) => {
@@ -460,14 +472,82 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		updateStatus();
 	});
 
-	pi.on("session_shutdown", () => {
-		for (const job of jobs.values()) {
+	pi.on("session_shutdown", async (event) => {
+		const running = [...jobs.values()];
+		for (const job of running) {
+			// The shutdown record below replaces the completion message.
 			job.silenced = true;
 			job.controller.abort();
 		}
+		// Wait (bounded) for the processes to exit, so the record has their output and the next
+		// runtime does not start while they are still being torn down.
+		const outcomes = new Map<Job, JobOutcome>();
+		let timer: NodeJS.Timeout | undefined;
+		await Promise.race([
+			Promise.all(running.map((job) => job.done.then((outcome) => void outcomes.set(job, outcome)))),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, killWaitMs);
+			}),
+		]);
+		clearTimeout(timer);
+		for (const job of running) recordInterrupted(job, outcomes.get(job), event.reason);
 		jobs.clear();
 		updateStatus();
 		uiCtx = undefined;
 		tui = undefined;
 	});
+
+	/** Record in the conversation that the session ended before the job finished. */
+	function recordInterrupted(job: Job, outcome: JobOutcome | undefined, reason: SessionShutdownEvent["reason"]) {
+		const durationMs = outcome?.durationMs ?? Date.now() - job.startedAt;
+		const header = `Background job ${job.id} was interrupted after ${formatDuration(durationMs)} because ${SHUTDOWN_REASONS[reason] ?? "the session ended"}: ${summarizeCommand(job.command)}`;
+		const latest = job.latest?.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+		const text = outcome
+			? outcome.text
+			: `${latest || "(no output)"}\n\nThe process did not exit within ${killWaitMs / 1000}s of the kill and may still be running.`;
+		const latestDetails = job.latest?.details;
+		const details: BashJobMessageDetails = {
+			id: job.id,
+			command: job.command,
+			timeout: job.timeout,
+			status: "killed",
+			reason: "interrupted",
+			durationMs,
+			bashDetails: outcome ? outcome.bashDetails : latestDetails?.truncation ? latestDetails : undefined,
+		};
+		try {
+			// The session is idle during shutdown, so the message is appended right away, to the session
+			// that ran the job (also when it is being replaced).
+			pi.sendMessage<BashJobMessageDetails>(
+				{ customType: MESSAGE_TYPE, content: `${header}\n\n${text}`, display: true, details },
+				{ triggerTurn: false },
+			);
+		} catch {
+			// Best effort: the runtime may already be unusable.
+		}
+	}
+}
+
+const SHUTDOWN_REASONS: Record<SessionShutdownEvent["reason"], string> = {
+	quit: "pi exited",
+	reload: "the session was reloaded",
+	new: "a new session was started",
+	resume: "another session was resumed",
+	fork: "the session was forked",
+};
+
+/** The highest `job-N` number in the branch, from `job` and `kill_job` results and job messages. */
+function lastJobNumber(entries: readonly SessionEntry[]): number {
+	let max = 0;
+	for (const entry of entries) {
+		let details: unknown;
+		if (entry.type === "custom_message" && entry.customType === MESSAGE_TYPE) details = entry.details;
+		else if (entry.type === "message" && entry.message.role === "toolResult" && JOB_TOOLS.has(entry.message.toolName)) {
+			details = entry.message.details;
+		}
+		const id = (details as { id?: unknown } | undefined)?.id;
+		const n = typeof id === "string" ? /^job-(\d+)$/.exec(id)?.[1] : undefined;
+		if (n) max = Math.max(max, Number(n));
+	}
+	return max;
 }

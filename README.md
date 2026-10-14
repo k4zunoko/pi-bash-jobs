@@ -9,7 +9,7 @@ Start a build or test run, keep working on something else, and get the result as
 - **Execution is pi's own bash tool.** Jobs run through `createBashToolDefinition().execute()`, so shell resolution (Git Bash on Windows), `PI_*` environment variables, `timeout`, process-tree kill, output truncation (last 2000 lines / 50KB) and the full-output temp file behave exactly like the built-in `bash` tool.
 - **Completion is a steer message.** `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` interrupts a running agent after its current tool batch, or starts a new turn when pi is idle.
 - **Completion is drawn as a bash tool row.** The message renderer returns pi's own `ToolExecutionComponent` for `bash` with the bash tool's renderers, so it looks like a finished `bash` call (`$ command · job-1`, output preview, `Took Ns`, ctrl+o to expand). The row is labeled `Job` (the `job` start row too, and `Kill Job` for `kill_job`), which display extensions use as its title. Display extensions that restyle bash rows by patching `ToolExecutionComponent` apply to it too. Renderers registered with `pi.registerToolRenderer` for `bash` are not consulted, because extensions cannot query that chain.
-- **No interactive shell, no PTY, no persistence.** Jobs live as long as the session.
+- **No interactive shell, no PTY, no persistence.** Jobs live as long as the session runtime. When it ends (quit, `/reload`, or switching to a new, resumed or forked session), running jobs are killed and each one is recorded in the conversation of the session that ran it (see [Session end](#session-end)).
 
 ## Tools
 
@@ -40,7 +40,7 @@ Background job job-1 failed (exit 2) after 1m4s: npm test ⏎ npm run lint
 ```
 
 - The first line is the header, and it is always one line. The command in it is a summary: lines joined with ` ⏎ `, cut to 80 characters with `…`. A blank line separates it from the output.
-- The header says how the job ended: `finished`, `failed (exit N)`, `timed out after … (timeout Ns)`, `was killed`, or `failed` (the command could not run, for example a spawn error). Durations read `12.3s`, `1m4s`, `1h2m5s`.
+- The header says how the job ended: `finished`, `failed (exit N)`, `timed out after … (timeout Ns)`, `was killed`, `failed` (the command could not run, for example a spawn error), or `was interrupted after … because …` (the session ended, see below). Durations read `12.3s`, `1m4s`, `1h2m5s`.
 - The `/jobs` list and the `job` result show the same one-line summary.
 
 `details` has the type `BashJobMessageDetails`, exported from `src/index.ts`:
@@ -51,12 +51,26 @@ Background job job-1 failed (exit 2) after 1m4s: npm test ⏎ npm run lint
 | `command` | The full command. |
 | `timeout` | The timeout in seconds, if one was given. |
 | `status` | `done` (exit code 0), `failed`, or `killed`. |
-| `reason` | Why the job ended: `exit` (the command exited; see `exitCode`), `timeout`, `aborted` (killed), or `error` (the command could not run). |
+| `reason` | Why the job ended: `exit` (the command exited; see `exitCode`), `timeout`, `aborted` (killed), `error` (the command could not run), or `interrupted` (the session ended before the job did). |
 | `exitCode` | Exit code, when the command exited. |
 | `durationMs` | Run time in milliseconds. |
 | `bashDetails` | The bash tool's details: `truncation` and `fullOutputPath` when the output was truncated, also for jobs that timed out or were killed. |
 
 Compatibility: fields are only added, not renamed or removed, without a breaking release noted in the [CHANGELOG](CHANGELOG.md); the same holds for `customType` and the header line. Readers should ignore unknown fields and treat unknown `reason` values like `error`. Messages stored by 0.2.0 and earlier have no `reason`, and their header ends with the full command; they still render as before.
+
+## Session end
+
+A session runtime ends when pi quits, on `/reload`, and when you switch to a new, resumed or forked session. Running jobs are then killed, and pi waits up to 5 seconds (in total) for them to exit before it continues. Each job gets one message in the conversation of the session that ran it, without waking the agent:
+
+```text
+Background job job-3 was interrupted after 42.0s because the session was reloaded: npm test
+
+<output so far>
+```
+
+The message has `status: "killed"` and `reason: "interrupted"`. A job that did not exit within the wait is recorded with its latest output and a note that it may still be running. So after a reload or `pi -c`, the conversation does not keep a job that waits for a result that will not come.
+
+Job ids continue across runtimes: a new runtime starts numbering after the highest `job-N` in the current branch, so an old `job-1` in the conversation and a new job never share an id.
 
 ## Install
 
@@ -83,7 +97,7 @@ Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md).
 ## Limitations
 
 - Meant for commands that finish on their own (builds, tests). Servers and watchers never complete, so they never notify.
-- All jobs are killed silently when the session shuts down, reloads, or is replaced.
+- Jobs do not survive the session runtime: quitting, `/reload`, and switching to a new, resumed or forked session kill them (see [Session end](#session-end)). If pi itself is killed (for example with `SIGKILL`) or crashes, there is no shutdown: nothing is recorded, and the job's processes may keep running.
 - Extensions that guard the tool named `bash` (permission gates, confirmations) do not see `job`; add it to them if needed.
 - The settings `shellPath` is not read; the default shell resolution of pi is used.
 - On Windows with Git Bash, killing a job can leave its child processes running (for example `sleep.exe`). MSYS starts children through intermediate processes that exit, so pi's `taskkill /T` cannot reach them. The built-in bash tool shares this behavior when aborted. Jobs that run to completion are not affected.
@@ -105,6 +119,8 @@ The tests need:
 - **bash.** Some tests run real commands through pi's bash tool: `/bin/bash` on Linux and macOS, Git Bash on Windows (found the same way pi finds it).
 
 `test/helpers.ts` provides the harness: a fake `ExtensionAPI` that records messages and UI calls, and `fakeBash()`, a bash tool whose runs stay pending until the test resolves or rejects them. Pass it as `createBashJobs({ createBashTool })` to test paths a real process cannot reproduce on demand (a process that ignores the kill, a spawn failure, jobs finishing in a chosen order). Tests wait for messages or poll with a deadline (`waitFor`) instead of sleeping a fixed time, and commands that get killed loop with shell builtins so no child process outlives the kill.
+
+`test/e2e-harness.ts` runs a real pi session runtime (`createAgentSessionRuntime`) with the extension and a scripted faux model (`@earendil-works/pi-ai`), for behavior that depends on pi itself: reload, quit and resume, session replacement.
 
 CI runs the typecheck and the tests on Linux and Windows (Git Bash) for every pull request and push to `main`.
 
