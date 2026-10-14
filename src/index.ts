@@ -61,6 +61,58 @@ function validateStart(params: { timeout?: number }, cwd: string, shell: BashToo
 /** Text of the latest partial result: the output tail so far. */
 const latestText = (job: Job) => job.latest?.content.map((c) => (c.type === "text" ? c.text : "")).join("") ?? "";
 
+const DEFAULT_TAIL_LINES = 20;
+/** The bash tool keeps the last 2000 lines (or 50KB); this bounds what one call can pull into context. */
+const MAX_TAIL_LINES = 500;
+
+const JOBS_OUTPUT = Type.Object({
+	jobs: Type.Array(
+		Type.Object({
+			id: Type.String(),
+			command: Type.String(),
+			state: Type.Union([Type.Literal("running"), Type.Literal("killing")], { description: "killing: a kill was sent, not exited yet" }),
+			elapsed_seconds: Type.Number(),
+			timeout: Type.Optional(Type.Number()),
+		}),
+	),
+	output: Type.Optional(Type.String({ description: "With `id`: the last `tail` lines of that job's output so far" })),
+});
+type JobsOutput = Static<typeof JOBS_OUTPUT>;
+
+function jobInfo(job: Job): JobsOutput["jobs"][number] {
+	const info: JobsOutput["jobs"][number] = {
+		id: job.id,
+		command: job.command,
+		state: job.state,
+		elapsed_seconds: Math.round((Date.now() - job.startedAt) / 100) / 10,
+	};
+	if (job.timeout !== undefined) info.timeout = job.timeout;
+	return info;
+}
+
+/** One line per running job, as in the `/jobs` list. */
+function runningLine(job: Job): string {
+	const state = job.state === "killing" ? ", killing" : "";
+	return `${job.id} (${formatDuration(Date.now() - job.startedAt)}${state}): ${summarizeCommand(job.command)}`;
+}
+
+/** The last `n` lines of `text`, without a trailing newline. */
+function tailLines(text: string, n: number): string {
+	if (text === "") return "";
+	return text.replace(/\n$/, "").split("\n").slice(-n).join("\n");
+}
+
+/** A running job with the last `n` lines of its output so far. */
+function showJob(job: Job, n: number): string {
+	const output = tailLines(latestText(job), n);
+	const fullOutputPath = job.latest?.details?.fullOutputPath;
+	return [
+		runningLine(job),
+		output ? `Output so far (last ${n} lines):\n${output}` : "No output yet.",
+		...(fullOutputPath ? [`Full output so far: ${fullOutputPath}`] : []),
+	].join("\n");
+}
+
 type JobStatus = "done" | "failed" | "killed";
 
 /**
@@ -236,15 +288,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			ctx.ui.setStatus(STATUS_KEY, parts.length > 0 ? `jobs: ${parts.join(", ")}` : undefined);
 		});
 
-	const listRunning = () =>
-		jobs.size === 0
-			? "No running jobs."
-			: [...jobs.values()]
-					.map((j) => {
-						const state = j.state === "killing" ? ", killing" : "";
-						return `${j.id} (${formatDuration(Date.now() - j.startedAt)}${state}): ${summarizeCommand(j.command)}`;
-					})
-					.join("\n");
+	const listRunning = () => (jobs.size === 0 ? "No running jobs." : [...jobs.values()].map(runningLine).join("\n"));
 
 	async function run(
 		job: Job,
@@ -445,27 +489,81 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		},
 	});
 
+	pi.registerTool({
+		name: "jobs",
+		label: "Jobs",
+		description:
+			"List the running background jobs started with the job tool, or show the latest output of one job (`id`, with the last `tail` lines, default " +
+			`${DEFAULT_TAIL_LINES}). Read-only. Use it to decide what to do about a running job, for example whether it is stuck and should be killed.`,
+		promptSnippet: "List running background jobs, or show the latest output of one",
+		promptGuidelines: [
+			"Use the jobs tool only to decide what to do about a running job (for example whether to kill it), not to poll for its completion: the result arrives on its own.",
+		],
+		annotations: { readOnlyHint: true, openWorldHint: false },
+		parameters: Type.Object({
+			id: Type.Optional(Type.String({ description: "Job id to show the latest output of, e.g. job-1" })),
+			tail: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: MAX_TAIL_LINES, description: `Number of output lines to show (default ${DEFAULT_TAIL_LINES})` }),
+			),
+		}),
+		outputSchema: JOBS_OUTPUT,
+		async execute(_toolCallId, { id, tail }, _signal, _onUpdate, ctx) {
+			uiCtx = ctx;
+			const structuredContent: JobsOutput = { jobs: [...jobs.values()].map(jobInfo) };
+			if (id === undefined) {
+				return { content: [{ type: "text", text: listRunning() }], details: undefined, structuredContent };
+			}
+			const job = jobs.get(id.trim());
+			if (!job) throw new Error(`No running job "${id}".\nRunning jobs:\n${listRunning()}`);
+			structuredContent.output = tailLines(latestText(job), tail ?? DEFAULT_TAIL_LINES);
+			return { content: [{ type: "text", text: showJob(job, tail ?? DEFAULT_TAIL_LINES) }], details: undefined, structuredContent };
+		},
+	});
+
+	const USAGE = "Usage: /jobs [list | show <id> [lines] | kill <id>... | kill all]";
 	pi.registerCommand("jobs", {
-		description: "List background bash jobs, or kill one: /jobs [kill <id>|all]",
+		description: "List background bash jobs, show one's latest output, or kill jobs: /jobs [list | show <id> [lines] | kill <id>... | kill all]",
 		getArgumentCompletions: (prefix) => {
-			const items = [{ value: "kill all", label: "kill all" }, ...[...jobs.keys()].map((id) => ({ value: `kill ${id}`, label: `kill ${id}` }))];
-			const matches = items.filter((i) => i.value.startsWith(prefix.trim()));
+			const ids = [...jobs.keys()];
+			const values = [
+				"list",
+				...ids.map((id) => `show ${id}`),
+				...ids.map((id) => `kill ${id}`),
+				...(ids.length > 0 ? ["kill all"] : []),
+			];
+			const matches = values.filter((v) => v.startsWith(prefix.trimStart())).map((v) => ({ value: v, label: v }));
 			return matches.length > 0 ? matches : null;
 		},
 		handler: async (args, ctx) => {
 			uiCtx = ctx;
-			const [sub, target] = args.trim().split(/\s+/);
+			const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 			if (!sub || sub === "list") {
-				ctx.ui.notify(listRunning(), "info");
+				if (rest.length > 0) ctx.ui.notify(USAGE, "warning");
+				else ctx.ui.notify(listRunning(), "info");
 				return;
 			}
-			if (sub !== "kill" || !target) {
-				ctx.ui.notify("Usage: /jobs [kill <id>|all]", "warning");
+			if (sub === "show" || sub === "tail") {
+				const [target, lines, ...extra] = rest;
+				const count = lines === undefined ? DEFAULT_TAIL_LINES : Number(lines);
+				if (!target || extra.length > 0 || !Number.isInteger(count) || count < 1) {
+					ctx.ui.notify(USAGE, "warning");
+					return;
+				}
+				const job = jobs.get(target);
+				if (!job) ctx.ui.notify(`No running job "${target}".`, "warning");
+				else ctx.ui.notify(showJob(job, Math.min(count, MAX_TAIL_LINES)), "info");
 				return;
 			}
-			const targets = target === "all" ? [...jobs.values()] : [jobs.get(target)].filter((j): j is Job => !!j);
+			if (sub !== "kill" || rest.length === 0 || (rest.includes("all") && rest.length > 1)) {
+				ctx.ui.notify(USAGE, "warning");
+				return;
+			}
+			const ids = rest[0] === "all" ? [...jobs.keys()] : [...new Set(rest)];
+			const unknown = ids.filter((id) => !jobs.has(id));
+			if (unknown.length > 0) ctx.ui.notify(`No running job ${unknown.map((id) => `"${id}"`).join(", ")}.`, "warning");
+			const targets = ids.map((id) => jobs.get(id)).filter((j): j is Job => !!j);
 			if (targets.length === 0) {
-				ctx.ui.notify(`No running job "${target}".`, "warning");
+				if (unknown.length === 0) ctx.ui.notify("No running jobs.", "info");
 				return;
 			}
 			const outcomes = await Promise.all(targets.map((job) => kill(job, "user")));

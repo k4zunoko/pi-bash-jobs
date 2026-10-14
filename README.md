@@ -17,19 +17,25 @@ Start a build or test run, keep working on something else, and get the result as
 |---|---|---|
 | `job { command, timeout? }` | Start a background job and return its id (`job-1`, ...) immediately. An invalid `timeout` (not a positive number, or over 2147483.647 seconds) or a missing working directory is an error result, and no job starts. | `{ id, command }` |
 | `kill_job { id }` | Kill a running job and its child processes, wait up to 5s for it to exit, and return its output so far. | `{ id, exited, status, exit_code?, output }`; `status` is `done`, `failed`, `killed`, or `killing` (not exited yet) |
+| `jobs { id?, tail? }` | Read-only. List the running jobs (id, elapsed time, `killing` state, command), or with `id` also show the last `tail` lines (default 20, at most 500) of that job's output so far, and the full output file once the output is truncated. | `{ jobs: [{ id, command, state, elapsed_seconds, timeout? }], output? }` |
 
 The model reads the text result; programmatic callers such as codemode scripts receive the structured result, which the tools declare with `outputSchema`.
 
 A job killed by the agent is reported only in the `kill_job` result (no extra message). If the job does not exit within 5 seconds, `kill_job` returns an error result (`exited: false`); the job stays listed as `killing`, and when it finally exits its output is recorded in the conversation without waking the agent (the header notes how long it took to exit after the kill).
 
-The tools add these guidelines to the system prompt: run slow commands as jobs and keep working instead of sleeping or polling; when nothing else is left to do, end the turn, because the result starts a new one; do not run the same command again with `bash` while its job runs; stop jobs that are no longer needed with `kill_job`.
+The tools add these guidelines to the system prompt: run slow commands as jobs and keep working instead of sleeping or polling; when nothing else is left to do, end the turn, because the result starts a new one; do not run the same command again with `bash` while its job runs; stop jobs that are no longer needed with `kill_job`; use `jobs` only to decide what to do about a running job (for example whether it is stuck), not to poll for its completion.
+
+There is no limit on how many jobs run at once, as there is none on parallel `bash` calls: a fixed number would suit some machines and commands and not others, and an error from it would only make the model retry later. Running jobs are always visible in the footer and in `/jobs`, and you can kill them there.
 
 ## Command
 
 | Command | Description |
 |---|---|
-| `/jobs` | List running jobs. Jobs that were sent a kill but have not exited yet are marked `killing`. |
-| `/jobs kill <id>` / `/jobs kill all` | Kill jobs, waiting up to 5s for each to exit. The kill is recorded in the conversation without waking the agent. Jobs that exited are reported as `Killed`; jobs that did not exit yet get a warning and stay listed as `killing` until they do. |
+| `/jobs` / `/jobs list` | List running jobs. Jobs that were sent a kill but have not exited yet are marked `killing`. |
+| `/jobs show <id> [lines]` (or `tail`) | Show the last lines (default 20) of a running job's output so far. |
+| `/jobs kill <id>...` / `/jobs kill all` | Kill one or more jobs, waiting up to 5s for each to exit. The kill is recorded in the conversation without waking the agent. Jobs that exited are reported as `Killed`; jobs that did not exit yet get a warning and stay listed as `killing` until they do. Unknown ids get a warning. |
+
+Argument completion offers `list`, and `show <id>`, `kill <id>` and `kill all` for the running jobs.
 
 The footer shows `jobs: N running` (and `, M killing`) while jobs are active.
 
@@ -122,7 +128,7 @@ Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 If you rely on such an extension, either extend it to `job`, turn the job tools off for a run with `pi --exclude-tools job,kill_job`, or do not load this package in that setup (`pi remove`, or a package entry with `"extensions": []`, see pi's package docs).
 
-The tools declare [annotations](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#tool-exposure) for permission extensions that decide from them: `job` is `destructiveHint: true, openWorldHint: true` (like a shell command), and `kill_job` is `destructiveHint: false, idempotentHint: true, openWorldHint: false`, because it only ends processes that `job` started.
+The tools declare [annotations](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#tool-exposure) for permission extensions that decide from them: `job` is `destructiveHint: true, openWorldHint: true` (like a shell command), and `kill_job` is `destructiveHint: false, idempotentHint: true, openWorldHint: false`, because it only ends processes that `job` started. `jobs` is `readOnlyHint: true, openWorldHint: false`.
 
 ## Development
 
