@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- `createBashJobs({ createBashTool, killWaitMs })` builds the extension with an injected bash tool definition and kill wait; the default export uses pi's bash tool. Tests use it to simulate processes that do not exit or fail to spawn.
+- Tests for the `/jobs` command, user kills, the footer status, `session_start`, startup errors and concurrent jobs. Tests wait on events or poll with a deadline instead of sleeping a fixed time.
+
 ## [0.2.0] - 2026-10-14
 
 ### Changed

@@ -70,6 +70,13 @@ pi -ne -e ./src/index.ts
 
 At runtime pi maps `@earendil-works/*` and `typebox` imports to its own copies, so they are peer dependencies.
 
+The tests need:
+
+- **Node 22.19 or later.** `npm test` runs the `.ts` files directly with Node's built-in type stripping (on by default since Node 22.18; pi itself requires 22.19).
+- **bash.** Some tests run real commands through pi's bash tool: `/bin/bash` on Linux and macOS, Git Bash on Windows (found the same way pi finds it).
+
+`test/helpers.ts` provides the harness: a fake `ExtensionAPI` that records messages and UI calls, and `fakeBash()`, a bash tool whose runs stay pending until the test resolves or rejects them. Pass it as `createBashJobs({ createBashTool })` to test paths a real process cannot reproduce on demand (a process that ignores the kill, a spawn failure, jobs finishing in a chosen order). Tests wait for messages or poll with a deadline (`waitFor`) instead of sleeping a fixed time, and commands that get killed loop with shell builtins so no child process outlives the kill.
+
 CI runs the typecheck and the tests on Linux and Windows (Git Bash) for every pull request and push to `main`.
 
 ### Releasing
