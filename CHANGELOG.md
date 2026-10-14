@@ -23,6 +23,7 @@ All notable changes to this project are documented here. The format is based on
 - Quitting, `/reload` and switching sessions no longer drop running jobs silently: each one is killed, pi waits up to 5s in total for them to exit, and the conversation of the session that ran it gets one `interrupted` message with the output so far. A model that resumes the conversation no longer waits for a result that never comes.
 - Job ids continue after the highest id in the branch when a new runtime starts (reload, resume), so ids are not reused within a conversation.
 - A failing completion message (for example from a stale runtime) no longer causes an unhandled promise rejection.
+- Print and JSON mode (`pi -p`, `pi --mode json`) no longer drop job results: when the model ends its turn while jobs run, the run waits at `agent_before_settle` until they finish, so the results reach the model before pi exits.
 
 ## [0.2.0] - 2026-10-14
 
