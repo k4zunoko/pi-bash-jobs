@@ -13,6 +13,12 @@ All notable changes to this project are documented here. The format is based on
 - End-to-end tests with a real pi session runtime and a faux model (`test/e2e-harness.ts`).
 - `reason` in the completion message details (`exit`, `timeout`, `aborted`, `error`, `interrupted`). A timeout reads `timed out after … (timeout Ns)` instead of `failed`.
 - The completion message format is documented in the README.
+- `job` and `kill_job` declare an `outputSchema` and return `structuredContent` (`{ id, command }` and `{ id, exited, status, exit_code?, output }`), so codemode scripts get data instead of text.
+- Prompt guidelines: end the turn when nothing else is left to do while a job runs, and do not rerun a job's command with `bash`.
+
+### Changed
+
+- `job` checks the `timeout` (same rules as the bash tool) and the working directory before it starts, and returns an error result instead of starting a job that fails right away. No job id is used up.
 
 ### Fixed
 

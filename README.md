@@ -13,12 +13,16 @@ Start a build or test run, keep working on something else, and get the result as
 
 ## Tools
 
-| Tool | Description |
-|---|---|
-| `job { command, timeout? }` | Start a background job and return its id (`job-1`, ...) immediately. |
-| `kill_job { id }` | Kill a running job and its child processes, wait up to 5s for it to exit, and return its output so far. |
+| Tool | Description | Structured result (`structuredContent`) |
+|---|---|---|
+| `job { command, timeout? }` | Start a background job and return its id (`job-1`, ...) immediately. An invalid `timeout` (not a positive number, or over 2147483.647 seconds) or a missing working directory is an error result, and no job starts. | `{ id, command }` |
+| `kill_job { id }` | Kill a running job and its child processes, wait up to 5s for it to exit, and return its output so far. | `{ id, exited, status, exit_code?, output }`; `status` is `done`, `failed`, `killed`, or `killing` (not exited yet) |
 
-A job killed by the agent is reported only in the `kill_job` result (no extra message). If the job does not exit within 5 seconds, `kill_job` returns an error result (`details.exited: false`); the job stays listed as `killing`, and when it finally exits its output is recorded in the conversation without waking the agent (the header notes how long it took to exit after the kill).
+The model reads the text result; programmatic callers such as codemode scripts receive the structured result, which the tools declare with `outputSchema`.
+
+A job killed by the agent is reported only in the `kill_job` result (no extra message). If the job does not exit within 5 seconds, `kill_job` returns an error result (`exited: false`); the job stays listed as `killing`, and when it finally exits its output is recorded in the conversation without waking the agent (the header notes how long it took to exit after the kill).
+
+The tools add these guidelines to the system prompt: run slow commands as jobs and keep working instead of sleeping or polling; when nothing else is left to do, end the turn, because the result starts a new one; do not run the same command again with `bash` while its job runs; stop jobs that are no longer needed with `kill_job`.
 
 ## Command
 
