@@ -1,6 +1,6 @@
 {
   "name": "pi-bash-jobs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run bash commands as background jobs in pi and get interrupted when they finish, reusing pi's built-in bash tool.",
   "type": "module",
   "private": true,
@@ -28,6 +28,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=22.19.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
