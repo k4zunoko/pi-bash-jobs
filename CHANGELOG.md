@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format is based on
 - A multi-line command with blank lines no longer shows part of the command as output in the completion row. The header, the `/jobs` list and the `job` result show a one-line summary of the command; `details.command` keeps the full command.
 - Durations carry over rounded seconds and show hours (`59.96s` is `1m0s`, not `60.0s`; `2h0m0s`, not `120m0s`).
 - Jobs that time out or are killed after their output was truncated keep the truncation details, so the completion row shows the full output path and the truncation warning.
+- A job that does not exit within the 5s kill wait is no longer lost: it is listed and counted as `killing` (`/jobs`, footer), and its output is recorded in the conversation (without waking the agent) when it exits. `kill_job` returns an error result with `details.exited: false` in that case, and `details.exited`, `status`, `reason` and `exitCode` otherwise. `/jobs kill` reports `Killed` only for jobs that exited and warns about the others.
 
 ## [0.2.0] - 2026-10-14
 

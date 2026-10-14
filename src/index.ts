@@ -55,8 +55,16 @@ interface Job {
 	done: Promise<JobOutcome>;
 	/** Latest partial result of the bash tool: the output tail so far and its truncation details. */
 	latest?: AgentToolResult<BashToolDetails | undefined>;
-	/** Who requested the kill. Agent kills are reported by the kill tool itself. */
+	/** `killing` once a kill was sent, until the process has exited. */
+	state: "running" | "killing";
+	/** Who requested the kill. Agent kills are reported by the kill tool itself while it waits. */
 	killedBy?: "agent" | "user";
+	/** When the first kill was sent. */
+	killRequestedAt?: number;
+	/** Kill calls currently waiting for the exit; their results report the outcome. */
+	killWaiters: number;
+	/** A kill gave up waiting, so the exit comes later and is recorded on its own. */
+	killWaitTimedOut?: boolean;
 	/** Suppress the completion message (session is shutting down). */
 	silenced?: boolean;
 }
@@ -102,11 +110,16 @@ export function formatDuration(ms: number): string {
 
 function describeOutcome(job: Job, outcome: JobOutcome): string {
 	const after = `after ${formatDuration(outcome.durationMs)}`;
+	// A kill that gave up waiting: say how long the process took to exit after it.
+	const late =
+		job.killWaitTimedOut && job.killRequestedAt !== undefined
+			? ` (exited ${formatDuration(job.startedAt + outcome.durationMs - job.killRequestedAt)} after the kill request)`
+			: "";
 	const what =
 		outcome.status === "done"
 			? `finished ${after}`
 			: outcome.status === "killed"
-				? `was killed ${after}`
+				? `was killed ${after}${late}`
 				: outcome.reason === "timeout"
 					? `timed out ${after} (timeout ${job.timeout}s)`
 					: outcome.exitCode !== undefined
@@ -166,13 +179,22 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	};
 
 	const updateStatus = () =>
-		safeUi((ctx) => ctx.ui.setStatus(STATUS_KEY, jobs.size > 0 ? `jobs: ${jobs.size} running` : undefined));
+		safeUi((ctx) => {
+			const all = [...jobs.values()];
+			const killing = all.filter((j) => j.state === "killing").length;
+			const running = all.length - killing;
+			const parts = [running > 0 ? `${running} running` : "", killing > 0 ? `${killing} killing` : ""].filter(Boolean);
+			ctx.ui.setStatus(STATUS_KEY, parts.length > 0 ? `jobs: ${parts.join(", ")}` : undefined);
+		});
 
 	const listRunning = () =>
 		jobs.size === 0
 			? "No running jobs."
 			: [...jobs.values()]
-					.map((j) => `${j.id} (${formatDuration(Date.now() - j.startedAt)}): ${summarizeCommand(j.command)}`)
+					.map((j) => {
+						const state = j.state === "killing" ? ", killing" : "";
+						return `${j.id} (${formatDuration(Date.now() - j.startedAt)}${state}): ${summarizeCommand(j.command)}`;
+					})
 					.join("\n");
 
 	async function run(job: Job, params: { command: string; timeout?: number }, ctx: ExtensionToolContext): Promise<JobOutcome> {
@@ -210,7 +232,9 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	}
 
 	function report(job: Job, outcome: JobOutcome) {
-		if (job.silenced || job.killedBy === "agent") return;
+		if (job.silenced) return;
+		// A kill_job call that is still waiting returns the outcome as its result.
+		if (job.killedBy === "agent" && job.killWaiters > 0) return;
 		const header = describeOutcome(job, outcome);
 		const details: BashJobMessageDetails = {
 			id: job.id,
@@ -222,8 +246,9 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			durationMs: outcome.durationMs,
 			bashDetails: outcome.bashDetails,
 		};
-		// A user kill is recorded for the agent's context without waking it up.
-		const options = job.killedBy === "user" ? { triggerTurn: false } : { triggerTurn: true, deliverAs: "steer" as const };
+		// A kill (by the user, or by the agent once kill_job stopped waiting) is recorded for the agent's
+		// context without waking it up: the kill was requested, so its end needs no new decision.
+		const options = job.killedBy ? { triggerTurn: false } : { triggerTurn: true, deliverAs: "steer" as const };
 		pi.sendMessage<BashJobMessageDetails>(
 			{ customType: MESSAGE_TYPE, content: `${header}\n\n${outcome.text}`, display: true, details },
 			options,
@@ -237,6 +262,8 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			timeout: params.timeout,
 			startedAt: Date.now(),
 			controller: new AbortController(),
+			state: "running",
+			killWaiters: 0,
 		} as Job;
 		job.done = run(job, params, ctx);
 		jobs.set(job.id, job);
@@ -249,16 +276,26 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		return job;
 	}
 
+	/** Abort the job and wait up to `killWaitMs` for it to exit. Resolves `undefined` if it is still running. */
 	async function kill(job: Job, by: "agent" | "user"): Promise<JobOutcome | undefined> {
 		job.killedBy = by;
+		job.killRequestedAt ??= Date.now();
+		if (job.state !== "killing") {
+			job.state = "killing";
+			updateStatus();
+		}
 		job.controller.abort();
 		let timer: NodeJS.Timeout | undefined;
 		const timeout = new Promise<undefined>((resolve) => {
 			timer = setTimeout(() => resolve(undefined), killWaitMs);
 		});
+		job.killWaiters++;
 		try {
-			return await Promise.race([job.done, timeout]);
+			const outcome = await Promise.race([job.done, timeout]);
+			if (!outcome) job.killWaitTimedOut = true;
+			return outcome;
 		} finally {
+			job.killWaiters--;
 			clearTimeout(timer);
 		}
 	}
@@ -295,7 +332,9 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	pi.registerTool({
 		name: "kill_job",
 		label: "Kill Job",
-		description: "Kill a running background job started with the job tool (including its child processes) and return its output so far.",
+		description:
+			"Kill a running background job started with the job tool (including its child processes) and return its output so far. " +
+			`Waits up to ${killWaitMs / 1000}s for the job to exit; if it does not, the result is an error and the output is recorded in the conversation when it exits.`,
 		parameters: Type.Object({
 			id: Type.String({ description: "Job id returned by the job tool, e.g. job-1" }),
 		}),
@@ -304,10 +343,24 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			const job = jobs.get(id.trim());
 			if (!job) throw new Error(`No running job "${id}".\nRunning jobs:\n${listRunning()}`);
 			const outcome = await kill(job, "agent");
-			const text = outcome
-				? `${describeOutcome(job, outcome)}\n\n${outcome.text}`
-				: `Sent kill to ${job.id}, but it did not exit within ${killWaitMs / 1000}s.`;
-			return { content: [{ type: "text", text }], details: { id: job.id } };
+			if (!outcome) {
+				return {
+					content: [
+						{
+							type: "text",
+							text:
+								`Sent kill to ${job.id}, but it did not exit within ${killWaitMs / 1000}s. ` +
+								"It is listed as killing until it exits; its output will then be recorded in the conversation.",
+						},
+					],
+					details: { id: job.id, exited: false },
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: `${describeOutcome(job, outcome)}\n\n${outcome.text}` }],
+				details: { id: job.id, exited: true, status: outcome.status, reason: outcome.reason, exitCode: outcome.exitCode },
+			};
 		},
 	});
 
@@ -334,8 +387,17 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 				ctx.ui.notify(`No running job "${target}".`, "warning");
 				return;
 			}
-			await Promise.all(targets.map((job) => kill(job, "user")));
-			ctx.ui.notify(`Killed ${targets.map((j) => j.id).join(", ")}`, "info");
+			const outcomes = await Promise.all(targets.map((job) => kill(job, "user")));
+			const exited = targets.filter((_, i) => outcomes[i]);
+			const waiting = targets.filter((_, i) => !outcomes[i]);
+			if (exited.length > 0) ctx.ui.notify(`Killed ${exited.map((j) => j.id).join(", ")}`, "info");
+			if (waiting.length > 0) {
+				ctx.ui.notify(
+					`Sent kill to ${waiting.map((j) => j.id).join(", ")}, but it did not exit within ${killWaitMs / 1000}s. ` +
+						"It is listed as killing until it exits.",
+					"warning",
+				);
+			}
 		},
 	});
 
