@@ -5,6 +5,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TestContext } from "node:test";
 import { type FauxResponseStep, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -29,8 +30,17 @@ export const toolTurn = (name: string, args: Parameters<typeof fauxToolCall>[1],
 
 type ExtensionMode = "tui" | "rpc" | "json" | "print";
 
-/** Start pi with the extension. Pass `resume` (a session file) to continue a session, like `pi --session <file>`. */
-export async function startPi(options: { extension: ExtensionFactory; mode?: ExtensionMode; dir?: string; resume?: string }) {
+/**
+ * Start pi with the extension. Pass `resume` (a session file) to continue a session, like `pi --session <file>`.
+ * Pass the test context `t` so the runtime (and with it any job still running) is disposed even when the test fails.
+ */
+export async function startPi(options: {
+	extension: ExtensionFactory;
+	t: TestContext;
+	mode?: ExtensionMode;
+	dir?: string;
+	resume?: string;
+}) {
 	const dir = options.dir ?? mkdtempSync(join(tmpdir(), "pi-bash-jobs-e2e-"));
 	const faux = fauxProvider();
 	const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: join(dir, "models.json") });
@@ -64,7 +74,11 @@ export async function startPi(options: { extension: ExtensionFactory; mode?: Ext
 	/** Bind the current session's extensions (emits session_start), as pi's modes do after each replacement. */
 	const bind = () => runtime.session.bindExtensions({ mode: options.mode ?? "rpc" });
 	await bind();
-	return { dir, faux, runtime, bind, get session() { return runtime.session; } };
+	let disposed: Promise<void> | undefined;
+	/** Quit pi (session_shutdown "quit"). Safe to call more than once. */
+	const dispose = () => (disposed ??= runtime.dispose());
+	options.t.after(dispose);
+	return { dir, faux, runtime, bind, dispose, get session() { return runtime.session; } };
 }
 
 /** Job messages in the current branch of `session`. */
