@@ -11,6 +11,7 @@
  */
 
 import type {
+	AgentToolResult,
 	BashToolDetails,
 	BashToolOptions,
 	ExtensionAPI,
@@ -30,8 +31,15 @@ const KILL_WAIT_MS = 5_000;
 
 type JobStatus = "done" | "failed" | "killed";
 
+/**
+ * Why a job ended: the command exited (`exit`, with an exit code), hit its `timeout`, was killed
+ * (`aborted`), or could not run or was ended otherwise (`error`, for example a spawn failure).
+ */
+export type JobEndReason = "exit" | "timeout" | "aborted" | "error";
+
 interface JobOutcome {
 	status: JobStatus;
+	reason: JobEndReason;
 	exitCode?: number;
 	text: string;
 	durationMs: number;
@@ -45,35 +53,78 @@ interface Job {
 	startedAt: number;
 	controller: AbortController;
 	done: Promise<JobOutcome>;
+	/** Latest partial result of the bash tool: the output tail so far and its truncation details. */
+	latest?: AgentToolResult<BashToolDetails | undefined>;
 	/** Who requested the kill. Agent kills are reported by the kill tool itself. */
 	killedBy?: "agent" | "user";
 	/** Suppress the completion message (session is shutting down). */
 	silenced?: boolean;
 }
 
+/** `details` of the `bash-jobs` completion message. See "Completion message" in the README. */
 export interface BashJobMessageDetails {
 	id: string;
+	/** The full command. The header in `content` shows a one-line summary. */
 	command: string;
 	timeout?: number;
 	status: JobStatus;
+	/** Why the job ended. Missing in messages written by 0.2.0 and earlier. */
+	reason?: JobEndReason;
 	exitCode?: number;
 	durationMs: number;
 	/** Bash tool details (truncation, full output path), used to render like a bash tool result. */
 	bashDetails?: BashToolDetails;
 }
 
-const formatDuration = (ms: number) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`);
+const COMMAND_SUMMARY_MAX = 80;
+
+/** One line for headers and lists: lines joined with ⏎, cut to `max` characters with an ellipsis. */
+export function summarizeCommand(command: string, max = COMMAND_SUMMARY_MAX): string {
+	const oneLine = command
+		.split(/\r\n|\r|\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.join(" ⏎ ");
+	const chars = Array.from(oneLine);
+	return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : oneLine;
+}
+
+/** `12.3s` under a minute, then `1m5s` and `1h2m5s`, rounded before splitting so 59.96s is `1m0s`. */
+export function formatDuration(ms: number): string {
+	const tenths = Math.round(ms / 100);
+	if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;
+	const total = Math.round(ms / 1000);
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	return h > 0 ? `${h}h${m}m${s}s` : `${m}m${s}s`;
+}
 
 function describeOutcome(job: Job, outcome: JobOutcome): string {
+	const after = `after ${formatDuration(outcome.durationMs)}`;
 	const what =
 		outcome.status === "done"
-			? "finished"
+			? `finished ${after}`
 			: outcome.status === "killed"
-				? "was killed"
-				: outcome.exitCode !== undefined
-					? `failed (exit ${outcome.exitCode})`
-					: "failed";
-	return `Background job ${job.id} ${what} after ${formatDuration(outcome.durationMs)}: ${job.command}`;
+				? `was killed ${after}`
+				: outcome.reason === "timeout"
+					? `timed out ${after} (timeout ${job.timeout}s)`
+					: outcome.exitCode !== undefined
+						? `failed (exit ${outcome.exitCode}) ${after}`
+						: `failed ${after}`;
+	return `Background job ${job.id} ${what}: ${summarizeCommand(job.command)}`;
+}
+
+/** The bash output of a completion message: everything after the header. */
+function outputOf(raw: string, d: BashJobMessageDetails): string {
+	// Messages without `reason` (0.2.0 and earlier) end the header with the full command, which can
+	// contain blank lines. Newer headers are always one line.
+	if (d.reason === undefined) {
+		const legacy = raw.indexOf(`: ${d.command}\n\n`);
+		if (legacy >= 0) return raw.slice(legacy + d.command.length + 4);
+	}
+	const end = raw.indexOf("\n\n");
+	return end >= 0 ? raw.slice(end + 2) : "";
 }
 
 /** Creates the bash tool definition that jobs run through; pi's `createBashToolDefinition` by default. */
@@ -120,15 +171,23 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	const listRunning = () =>
 		jobs.size === 0
 			? "No running jobs."
-			: [...jobs.values()].map((j) => `${j.id} (${formatDuration(Date.now() - j.startedAt)}): ${j.command}`).join("\n");
+			: [...jobs.values()]
+					.map((j) => `${j.id} (${formatDuration(Date.now() - j.startedAt)}): ${summarizeCommand(j.command)}`)
+					.join("\n");
 
 	async function run(job: Job, params: { command: string; timeout?: number }, ctx: ExtensionToolContext): Promise<JobOutcome> {
+		// The bash tool sends its last snapshot (with truncation and the full output path) before it
+		// throws on a timeout or abort, so keep it for the failure paths.
+		const onUpdate = (partial: AgentToolResult<BashToolDetails | undefined>) => {
+			job.latest = partial;
+		};
 		try {
-			const result = await bash.execute(job.id, params, job.controller.signal, undefined, ctx);
+			const result = await bash.execute(job.id, params, job.controller.signal, onUpdate, ctx);
 			const text = result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
 			const exitCode = (result.structuredContent as { exit_code?: number } | undefined)?.exit_code;
 			return {
 				status: result.isError ? "failed" : "done",
+				reason: "exit",
 				exitCode,
 				text,
 				durationMs: Date.now() - job.startedAt,
@@ -136,10 +195,16 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			};
 		} catch (err) {
 			// Timeouts, aborts and spawn errors are thrown by the bash tool with the output tail in the message.
+			const text = err instanceof Error ? err.message : String(err);
+			const aborted = job.controller.signal.aborted;
+			const timedOut = !aborted && job.timeout !== undefined && /Command timed out after [^\n]* seconds$/.test(text);
+			const details = job.latest?.details;
 			return {
-				status: job.controller.signal.aborted ? "killed" : "failed",
-				text: err instanceof Error ? err.message : String(err),
+				status: aborted ? "killed" : "failed",
+				reason: aborted ? "aborted" : timedOut ? "timeout" : "error",
+				text,
 				durationMs: Date.now() - job.startedAt,
+				bashDetails: details?.truncation ? details : undefined,
 			};
 		}
 	}
@@ -152,6 +217,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			command: job.command,
 			timeout: job.timeout,
 			status: outcome.status,
+			reason: outcome.reason,
 			exitCode: outcome.exitCode,
 			durationMs: outcome.durationMs,
 			bashDetails: outcome.bashDetails,
@@ -218,7 +284,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 				content: [
 					{
 						type: "text",
-						text: `Started background job ${job.id}: ${job.command}\nA message will arrive when it finishes. Continue with other work.`,
+						text: `Started background job ${job.id}: ${summarizeCommand(job.command)}\nA message will arrive when it finishes. Continue with other work.`,
 					},
 				],
 				details: { id: job.id },
@@ -297,7 +363,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 				? message.content
 				: message.content.map((c) => (c.type === "text" ? c.text : "")).join("");
 		// The model-facing content is "<header>\n\n<bash output>"; the row shows only the bash output.
-		const output = raw.slice(raw.indexOf("\n\n") + 2);
+		const output = outputOf(raw, d);
 		const ui = tui ?? ({ requestRender() {} } as unknown as TUI);
 		const row = new ToolExecutionComponent(
 			"bash",
