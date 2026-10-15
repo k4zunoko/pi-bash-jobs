@@ -61,6 +61,11 @@ function validateStart(params: { timeout?: number }, cwd: string, shell: BashToo
 /** Text of the latest partial result: the output tail so far. */
 const latestText = (job: Job) => job.latest?.content.map((c) => (c.type === "text" ? c.text : "")).join("") ?? "";
 
+/** Why `job` refuses to start while an extension replaces `bash`. */
+const replacedBashMessage = (replacedBy: string) =>
+	`The job tool is disabled: the bash tool is replaced by ${replacedBy} (for example to run commands in a sandbox or on another host). ` +
+	"Jobs run pi's built-in bash on this machine and would bypass that replacement, so no job was started. Run the command with the bash tool instead.";
+
 const DEFAULT_TAIL_LINES = 20;
 /** The bash tool keeps the last 2000 lines (or 50KB); this bounds what one call can pull into context. */
 const MAX_TAIL_LINES = 500;
@@ -258,6 +263,24 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	let tui: TUI | undefined;
 
 	/**
+	 * Where the `bash` tool comes from, when an extension (or SDK host) registered its own `bash` in
+	 * place of pi's built-in one; `undefined` for the built-in tool, no `bash` tool, or a pi without
+	 * `getAllTools`. Throws if the check fails, so a job never starts unchecked.
+	 */
+	const bashReplacement = (): string | undefined => {
+		if (typeof pi.getAllTools !== "function") return undefined;
+		let tools: ReturnType<ExtensionAPI["getAllTools"]>;
+		try {
+			tools = pi.getAllTools();
+		} catch (err) {
+			throw new Error(`Cannot check whether the bash tool is replaced, so no job was started: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		const bashTool = tools.find((tool) => tool.name === "bash");
+		if (!bashTool || bashTool.sourceInfo?.source === "builtin") return undefined;
+		return bashTool.sourceInfo?.path || "another extension";
+	};
+
+	/**
 	 * The shell settings pi creates the built-in bash tool with (`shellPath`, `shellCommandPrefix`),
 	 * read when each job starts. Without `pi.getSettings` (older pi), pi's default shell is used.
 	 */
@@ -428,6 +451,10 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			uiCtx = ctx;
+			// Jobs run pi's built-in bash implementation; refuse rather than bypass an extension that
+			// replaced `bash` (sandbox, remote host, spawn hook).
+			const replacedBy = bashReplacement();
+			if (replacedBy) throw new Error(replacedBashMessage(replacedBy));
 			// Fail fast for input the bash tool would reject right away, instead of a "started" result
 			// followed by a failure message that interrupts the agent.
 			const shell = shellSettings();
@@ -640,6 +667,20 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 
 	pi.on("session_start", (_event, ctx) => {
 		uiCtx = ctx;
+		// Tell the user up front when jobs are refused because `bash` is replaced.
+		if (ctx.hasUI) {
+			try {
+				const replacedBy = bashReplacement();
+				if (replacedBy) {
+					ctx.ui.notify(
+						`pi-bash-jobs: the job tool is disabled because the bash tool is replaced by ${replacedBy}; jobs would run outside it.`,
+						"warning",
+					);
+				}
+			} catch {
+				// The job tool reports the failure when it is called.
+			}
+		}
 		// Each runtime (after reload, resume, new or fork) starts with a fresh counter; continue after
 		// the ids already in this branch so old and new jobs never share an id.
 		seq = Math.max(seq, lastJobNumber(ctx.sessionManager.getBranch()));

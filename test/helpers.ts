@@ -40,6 +40,8 @@ export interface SetupOptions extends BashJobsOptions {
 	sendMessageThrows?: boolean;
 	/** Effective settings returned by `pi.getSettings()`; a function is called each time. Omit for a pi without it. */
 	settings?: Record<string, unknown> | (() => Record<string, unknown>);
+	/** Tools returned by `pi.getAllTools()` (name and sourceInfo suffice); a function is called each time. Omit for a pi without it. */
+	tools?: Array<Record<string, unknown>> | (() => Array<Record<string, unknown>>);
 }
 
 export function setup(options: SetupOptions = {}) {
@@ -59,6 +61,7 @@ export function setup(options: SetupOptions = {}) {
 		...(options.settings
 			? { getSettings: () => (typeof options.settings === "function" ? options.settings() : { ...options.settings }) }
 			: {}),
+		...(options.tools ? { getAllTools: () => (typeof options.tools === "function" ? options.tools() : options.tools) } : {}),
 		sendMessage: (message: any, opts: unknown) => {
 			if (options.sendMessageThrows) throw new Error("This extension runtime is stale");
 			sent.push({ message, options: opts });
