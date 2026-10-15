@@ -38,6 +38,8 @@ export async function startPi(options: {
 	extension: ExtensionFactory;
 	t: TestContext;
 	mode?: ExtensionMode;
+	/** Settings, as in settings.json. */
+	settings?: Record<string, unknown>;
 	dir?: string;
 	resume?: string;
 }) {
@@ -45,7 +47,7 @@ export async function startPi(options: {
 	const faux = fauxProvider();
 	const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: join(dir, "models.json") });
 	modelRuntime.registerNativeProvider(faux.provider);
-	const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
+	const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, ...options.settings });
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
 		const services = await createAgentSessionServices({
 			cwd,

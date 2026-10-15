@@ -48,12 +48,13 @@ const KILL_JOB_OUTPUT = Type.Object({
 type KillJobOutput = Static<typeof KILL_JOB_OUTPUT>;
 
 /** Reject input the bash tool would reject as soon as it runs, with the same messages. */
-function validateStart(params: { timeout?: number }, cwd: string) {
+function validateStart(params: { timeout?: number }, cwd: string, shell: BashToolOptions) {
 	const { timeout } = params;
 	if (timeout !== undefined) {
 		if (!Number.isFinite(timeout) || timeout <= 0) throw new Error("Invalid timeout: must be a finite number of seconds");
 		if (timeout > MAX_TIMEOUT_SECONDS) throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
 	}
+	if (shell.shellPath && !existsSync(shell.shellPath)) throw new Error(`Custom shell path not found: ${shell.shellPath}`);
 	if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
 }
 
@@ -196,12 +197,26 @@ export function createBashJobs(options: BashJobsOptions = {}) {
 export default createBashJobs();
 
 function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, killWaitMs: number) {
+	/** Used for the `job` parameters and the completion row renderers; each job runs on its own definition. */
 	const bash = createBashTool(process.cwd());
 	const jobs = new Map<string, Job>();
 	let seq = 0;
 	let uiCtx: ExtensionContext | undefined;
 	/** The interactive TUI, captured so completion cards can repaint themselves like live tool rows. */
 	let tui: TUI | undefined;
+
+	/**
+	 * The shell settings pi creates the built-in bash tool with (`shellPath`, `shellCommandPrefix`),
+	 * read when each job starts. Without `pi.getSettings` (older pi), pi's default shell is used.
+	 */
+	const shellSettings = (): BashToolOptions => {
+		try {
+			const settings = typeof pi.getSettings === "function" ? pi.getSettings() : undefined;
+			return { shellPath: settings?.shellPath || undefined, commandPrefix: settings?.shellCommandPrefix || undefined };
+		} catch {
+			return {};
+		}
+	};
 
 	const safeUi = (fn: (ctx: ExtensionContext) => void) => {
 		if (!uiCtx?.hasUI) return;
@@ -231,14 +246,19 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 					})
 					.join("\n");
 
-	async function run(job: Job, params: { command: string; timeout?: number }, ctx: ExtensionToolContext): Promise<JobOutcome> {
+	async function run(
+		job: Job,
+		runner: ReturnType<BashToolFactory>,
+		params: { command: string; timeout?: number },
+		ctx: ExtensionToolContext,
+	): Promise<JobOutcome> {
 		// The bash tool sends its last snapshot (with truncation and the full output path) before it
 		// throws on a timeout or abort, so keep it for the failure paths.
 		const onUpdate = (partial: AgentToolResult<BashToolDetails | undefined>) => {
 			job.latest = partial;
 		};
 		try {
-			const result = await bash.execute(job.id, params, job.controller.signal, onUpdate, ctx);
+			const result = await runner.execute(job.id, params, job.controller.signal, onUpdate, ctx);
 			const text = result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
 			const exitCode = (result.structuredContent as { exit_code?: number } | undefined)?.exit_code;
 			return {
@@ -289,7 +309,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		);
 	}
 
-	function start(params: { command: string; timeout?: number }, ctx: ExtensionToolContext): Job {
+	function start(params: { command: string; timeout?: number }, ctx: ExtensionToolContext, shell: BashToolOptions): Job {
 		const job = {
 			id: `job-${++seq}`,
 			command: params.command,
@@ -299,7 +319,8 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			state: "running",
 			killWaiters: 0,
 		} as Job;
-		job.done = run(job, params, ctx);
+		// A bash tool per job, created like pi creates the built-in one, so the shell settings apply.
+		job.done = run(job, createBashTool(ctx.cwd, shell), params, ctx);
 		jobs.set(job.id, job);
 		updateStatus();
 		job.reported = job.done
@@ -362,8 +383,9 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			uiCtx = ctx;
 			// Fail fast for input the bash tool would reject right away, instead of a "started" result
 			// followed by a failure message that interrupts the agent.
-			validateStart(params, ctx.cwd);
-			const job = start(params, ctx);
+			const shell = shellSettings();
+			validateStart(params, ctx.cwd, shell);
+			const job = start(params, ctx, shell);
 			return {
 				content: [
 					{

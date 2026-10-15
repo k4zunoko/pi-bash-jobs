@@ -19,6 +19,7 @@ All notable changes to this project are documented here. The format is based on
 ### Changed
 
 - `job` checks the `timeout` (same rules as the bash tool) and the working directory before it starts, and returns an error result instead of starting a job that fails right away. No job id is used up.
+- Jobs use the `shellPath` and `shellCommandPrefix` settings like the built-in `bash` tool (read with `pi.getSettings()` when each job starts). A `shellPath` that does not exist is an error result. Without `pi.getSettings()` (older pi), jobs keep using pi's default shell.
 
 ### Fixed
 

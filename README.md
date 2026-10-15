@@ -6,7 +6,7 @@ Start a build or test run, keep working on something else, and get the result as
 
 ## Design
 
-- **Execution is pi's own bash tool.** Jobs run through `createBashToolDefinition().execute()`, so shell resolution (Git Bash on Windows), `PI_*` environment variables, `timeout`, process-tree kill, output truncation (last 2000 lines / 50KB) and the full-output temp file behave exactly like the built-in `bash` tool.
+- **Execution is pi's own bash tool.** Each job runs through `createBashToolDefinition(cwd, { shellPath, commandPrefix })`, created with the `shellPath` and `shellCommandPrefix` settings the way pi creates the built-in `bash` tool. Shell resolution (Git Bash on Windows, or `shellPath`), the command prefix, `PI_*` environment variables, `timeout`, process-tree kill, output truncation (last 2000 lines / 50KB) and the full-output temp file behave like the built-in `bash` tool. Differences: a job reads the settings when it starts, while the built-in tool reads them when the session starts or reloads; and extensions that guard or replace `bash` do not apply to jobs (see [Limitations](#limitations)).
 - **Completion is a steer message.** `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` interrupts a running agent after its current tool batch, or starts a new turn when pi is idle.
 - **Completion is drawn as a bash tool row.** The message renderer returns pi's own `ToolExecutionComponent` for `bash` with the bash tool's renderers, so it looks like a finished `bash` call (`$ command · job-1`, output preview, `Took Ns`, ctrl+o to expand). The row is labeled `Job` (the `job` start row too, and `Kill Job` for `kill_job`), which display extensions use as its title. Display extensions that restyle bash rows by patching `ToolExecutionComponent` apply to it too. Renderers registered with `pi.registerToolRenderer` for `bash` are not consulted, because extensions cannot query that chain.
 - **No interactive shell, no PTY, no persistence.** Jobs live as long as the session runtime. When it ends (quit, `/reload`, or switching to a new, resumed or forked session), running jobs are killed and each one is recorded in the conversation of the session that ran it (see [Session end](#session-end)).
@@ -111,7 +111,6 @@ Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md).
 - Meant for commands that finish on their own (builds, tests). Servers and watchers never complete, so they never notify.
 - Jobs do not survive the session runtime: quitting, `/reload`, and switching to a new, resumed or forked session kill them (see [Session end](#session-end)). If pi itself is killed (for example with `SIGKILL`) or crashes, there is no shutdown: nothing is recorded, and the job's processes may keep running.
 - Extensions that guard the tool named `bash` (permission gates, confirmations) do not see `job`; add it to them if needed.
-- The settings `shellPath` is not read; the default shell resolution of pi is used.
 - On Windows with Git Bash, killing a job can leave its child processes running (for example `sleep.exe`). MSYS starts children through intermediate processes that exit, so pi's `taskkill /T` cannot reach them. The built-in bash tool shares this behavior when aborted. Jobs that run to completion are not affected.
 
 ## Development
