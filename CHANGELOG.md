@@ -16,7 +16,7 @@ All notable changes to this project are documented here. The format is based on
 - `job` and `kill_job` declare an `outputSchema` and return `structuredContent` (`{ id, command }` and `{ id, exited, status, exit_code?, output }`), so codemode scripts get data instead of text.
 - Prompt guidelines: end the turn when nothing else is left to do while a job runs, and do not rerun a job's command with `bash`.
 - `job` and `kill_job` declare tool annotations (`job`: destructive, open world; `kill_job`: not destructive, idempotent, closed world) for permission extensions.
-- A Security section in the README: jobs bypass `tool_call` guards on `bash` and extensions that replace `bash` (sandbox, SSH, spawn hooks), and how to cover or disable them.
+- A Security section in the README: how jobs relate to extensions that replace `bash` (detected, `job` refuses) and to `tool_call` guards on `bash` (not detectable; how to extend them to `job` or disable the job tools).
 - `jobs { id?, tail? }`: a read-only tool that lists the running jobs, or shows the last lines of one job's output so far, so the agent can tell a stuck job from a slow one.
 - `/jobs show <id> [lines]` (alias `tail`) shows a running job's latest output; `/jobs kill` accepts several ids and warns about unknown ones; completion offers `list`, `show <id>`, `kill <id>`, and `kill all` only when jobs run.
 
@@ -24,6 +24,7 @@ All notable changes to this project are documented here. The format is based on
 
 - `job` checks the `timeout` (same rules as the bash tool) and the working directory before it starts, and returns an error result instead of starting a job that fails right away. No job id is used up.
 - Jobs use the `shellPath` and `shellCommandPrefix` settings like the built-in `bash` tool (read with `pi.getSettings()` when each job starts). A `shellPath` that does not exist is an error result. Without `pi.getSettings()` (older pi), jobs keep using pi's default shell.
+- **Breaking for setups that replace `bash`:** `job` refuses to start while an extension replaces the `bash` tool (sandbox, SSH, spawn hook), because the job would run locally with pi's built-in bash and bypass it. The error result names the extension and tells the model to use `bash`; the user gets a warning when the session starts.
 
 ### Fixed
 
