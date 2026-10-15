@@ -17,6 +17,8 @@ All notable changes to this project are documented here. The format is based on
 - Prompt guidelines: end the turn when nothing else is left to do while a job runs, and do not rerun a job's command with `bash`.
 - `job` and `kill_job` declare tool annotations (`job`: destructive, open world; `kill_job`: not destructive, idempotent, closed world) for permission extensions.
 - A Security section in the README: jobs bypass `tool_call` guards on `bash` and extensions that replace `bash` (sandbox, SSH, spawn hooks), and how to cover or disable them.
+- `jobs { id?, tail? }`: a read-only tool that lists the running jobs, or shows the last lines of one job's output so far, so the agent can tell a stuck job from a slow one.
+- `/jobs show <id> [lines]` (alias `tail`) shows a running job's latest output; `/jobs kill` accepts several ids and warns about unknown ones; completion offers `list`, `show <id>`, `kill <id>`, and `kill all` only when jobs run.
 
 ### Changed
 
