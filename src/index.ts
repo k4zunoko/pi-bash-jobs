@@ -10,7 +10,15 @@
  * it interrupts a running agent after the current tool batch, or starts a new turn when idle.
  */
 
-import type { BashToolDetails, ExtensionAPI, ExtensionContext, ExtensionToolContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+	BashToolDetails,
+	BashToolOptions,
+	ExtensionAPI,
+	ExtensionContext,
+	ExtensionToolContext,
+	Theme,
+	ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -68,8 +76,29 @@ function describeOutcome(job: Job, outcome: JobOutcome): string {
 	return `Background job ${job.id} ${what} after ${formatDuration(outcome.durationMs)}: ${job.command}`;
 }
 
-export default function bashJobs(pi: ExtensionAPI) {
-	const bash = createBashToolDefinition(process.cwd());
+/** Creates the bash tool definition that jobs run through; pi's `createBashToolDefinition` by default. */
+export type BashToolFactory = (cwd: string, options?: BashToolOptions) => ReturnType<typeof createBashToolDefinition>;
+
+export interface BashJobsOptions {
+	/** Replace the bash tool definition, for example with a fake in tests. Default: `createBashToolDefinition`. */
+	createBashTool?: BashToolFactory;
+	/** How long a kill waits for the job to exit, in milliseconds. Default: 5000. */
+	killWaitMs?: number;
+}
+
+/** Build the extension factory. The default export uses the defaults; tests inject a fake bash tool. */
+export function createBashJobs(options: BashJobsOptions = {}) {
+	const createBashTool = options.createBashTool ?? createBashToolDefinition;
+	const killWaitMs = options.killWaitMs ?? KILL_WAIT_MS;
+	return function bashJobs(pi: ExtensionAPI) {
+		registerBashJobs(pi, createBashTool, killWaitMs);
+	};
+}
+
+export default createBashJobs();
+
+function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, killWaitMs: number) {
+	const bash = createBashTool(process.cwd());
 	const jobs = new Map<string, Job>();
 	let seq = 0;
 	let uiCtx: ExtensionContext | undefined;
@@ -159,7 +188,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 		job.controller.abort();
 		let timer: NodeJS.Timeout | undefined;
 		const timeout = new Promise<undefined>((resolve) => {
-			timer = setTimeout(() => resolve(undefined), KILL_WAIT_MS);
+			timer = setTimeout(() => resolve(undefined), killWaitMs);
 		});
 		try {
 			return await Promise.race([job.done, timeout]);
@@ -211,7 +240,7 @@ export default function bashJobs(pi: ExtensionAPI) {
 			const outcome = await kill(job, "agent");
 			const text = outcome
 				? `${describeOutcome(job, outcome)}\n\n${outcome.text}`
-				: `Sent kill to ${job.id}, but it did not exit within ${KILL_WAIT_MS / 1000}s.`;
+				: `Sent kill to ${job.id}, but it did not exit within ${killWaitMs / 1000}s.`;
 			return { content: [{ type: "text", text }], details: { id: job.id } };
 		},
 	});
