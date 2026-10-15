@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
 ### Added
 
 - `createBashJobs({ createBashTool, killWaitMs })` builds the extension with an injected bash tool definition and kill wait; the default export uses pi's bash tool. Tests use it to simulate processes that do not exit or fail to spawn.
@@ -56,6 +58,7 @@ All notable changes to this project are documented here. The format is based on
 - `bash_job` and `bash_job_kill` tools that run commands through pi's built-in bash tool in the background and steer the completion into the conversation.
 - `/bash-jobs` command to list and kill jobs, and a footer status while jobs run.
 
-[Unreleased]: https://github.com/k4zunoko/pi-bash-jobs/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/k4zunoko/pi-bash-jobs/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/k4zunoko/pi-bash-jobs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/k4zunoko/pi-bash-jobs/compare/cb7356c...v0.2.0
 [0.1.0]: https://github.com/k4zunoko/pi-bash-jobs/commit/cb7356c
