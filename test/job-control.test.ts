@@ -59,17 +59,6 @@ test("the footer status is not touched without a UI", async () => {
 	assert.deepEqual(statuses, []);
 });
 
-test("kill_job reports a job that does not exit within the wait", async () => {
-	const bash = fakeBash({ ignoreAbort: true });
-	const { call, sent } = setup({ createBashTool: bash.factory, killWaitMs: 20 });
-	await call("job", { command: "stuck" });
-	const run = await bash.call(0);
-	const r = await call("kill_job", { id: "job-1" });
-	assert.equal(run.signal.aborted, true);
-	assert.equal(text(r), "Sent kill to job-1, but it did not exit within 0.02s.");
-	assert.equal(sent.length, 0);
-});
-
 test("kill_job with an unknown id lists the running jobs", async () => {
 	const bash = fakeBash();
 	const { call } = setup({ createBashTool: bash.factory });

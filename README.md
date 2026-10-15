@@ -16,18 +16,18 @@ Start a build or test run, keep working on something else, and get the result as
 | Tool | Description |
 |---|---|
 | `job { command, timeout? }` | Start a background job and return its id (`job-1`, ...) immediately. |
-| `kill_job { id }` | Kill a running job and its child processes; returns the output so far. |
+| `kill_job { id }` | Kill a running job and its child processes, wait up to 5s for it to exit, and return its output so far. |
 
-A job killed by the agent is reported only in the `kill_job` result (no extra message).
+A job killed by the agent is reported only in the `kill_job` result (no extra message). If the job does not exit within 5 seconds, `kill_job` returns an error result (`details.exited: false`); the job stays listed as `killing`, and when it finally exits its output is recorded in the conversation without waking the agent (the header notes how long it took to exit after the kill).
 
 ## Command
 
 | Command | Description |
 |---|---|
-| `/jobs` | List running jobs. |
-| `/jobs kill <id>` / `/jobs kill all` | Kill jobs. The kill is recorded in the conversation without waking the agent. |
+| `/jobs` | List running jobs. Jobs that were sent a kill but have not exited yet are marked `killing`. |
+| `/jobs kill <id>` / `/jobs kill all` | Kill jobs, waiting up to 5s for each to exit. The kill is recorded in the conversation without waking the agent. Jobs that exited are reported as `Killed`; jobs that did not exit yet get a warning and stay listed as `killing` until they do. |
 
-The footer shows `jobs: N running` while jobs are active.
+The footer shows `jobs: N running` (and `, M killing`) while jobs are active.
 
 ## Completion message
 
