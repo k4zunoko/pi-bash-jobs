@@ -1,6 +1,6 @@
 {
   "name": "pi-bash-jobs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Run bash commands as background jobs in pi and get interrupted when they finish, reusing pi's built-in bash tool.",
   "type": "module",
   "private": true,
