@@ -74,25 +74,6 @@ test("keeps the truncation details when a job times out after truncating its out
 	assert.ok(rendered.includes(`[Full output: ${fullOutputPath}. Truncated: showing 2000 of 3000 lines]`), rendered);
 });
 
-test("reports an invalid timeout as a failed job", async () => {
-	const { call, message } = setup();
-	await call("job", { command: "echo never", timeout: -1 });
-	const { message: m } = await message(0);
-	assert.equal(m.details.status, "failed");
-	assert.equal(m.details.reason, "error");
-	assert.match(m.content, /Invalid timeout/);
-});
-
-test("reports a missing working directory as a failed job", async () => {
-	const missing = join(tmpdir(), "pi-bash-jobs-missing-dir");
-	assert.ok(!existsSync(missing));
-	const { call, message } = setup({ ctx: { cwd: missing } });
-	await call("job", { command: "echo never" });
-	const { message: m } = await message(0);
-	assert.equal(m.details.status, "failed");
-	assert.match(m.content, /Working directory does not exist/);
-});
-
 test("kill_job stops the job and reports only in its result", async () => {
 	const started = marker();
 	const { call, sent } = setup();

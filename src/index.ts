@@ -10,6 +10,7 @@
  * it interrupts a running agent after the current tool batch, or starts a new turn when idle.
  */
 
+import { existsSync } from "node:fs";
 import type {
 	AgentToolResult,
 	BashToolDetails,
@@ -24,7 +25,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { Text, type TUI } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 const MESSAGE_TYPE = "bash-jobs";
 const STATUS_KEY = "bash-jobs";
@@ -32,6 +33,32 @@ const TUI_CAPTURE_KEY = "bash-jobs:tui";
 const KILL_WAIT_MS = 5_000;
 /** Tools whose results carry a job id in `details.id`. */
 const JOB_TOOLS = new Set(["job", "kill_job"]);
+/** The bash tool's timeout limit (the largest setTimeout delay), in seconds. */
+const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000;
+
+const KILL_JOB_OUTPUT = Type.Object({
+	id: Type.String(),
+	exited: Type.Boolean({ description: "Whether the job exited within the kill wait" }),
+	status: Type.Union([Type.Literal("done"), Type.Literal("failed"), Type.Literal("killed"), Type.Literal("killing")], {
+		description: "killing: the kill was sent but the job has not exited yet",
+	}),
+	exit_code: Type.Optional(Type.Number()),
+	output: Type.String({ description: "Output so far, truncated like the bash tool" }),
+});
+type KillJobOutput = Static<typeof KILL_JOB_OUTPUT>;
+
+/** Reject input the bash tool would reject as soon as it runs, with the same messages. */
+function validateStart(params: { timeout?: number }, cwd: string) {
+	const { timeout } = params;
+	if (timeout !== undefined) {
+		if (!Number.isFinite(timeout) || timeout <= 0) throw new Error("Invalid timeout: must be a finite number of seconds");
+		if (timeout > MAX_TIMEOUT_SECONDS) throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
+	}
+	if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
+}
+
+/** Text of the latest partial result: the output tail so far. */
+const latestText = (job: Job) => job.latest?.content.map((c) => (c.type === "text" ? c.text : "")).join("") ?? "";
 
 type JobStatus = "done" | "failed" | "killed";
 
@@ -322,11 +349,20 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		promptSnippet: "Run a long bash command in the background; you are notified when it finishes",
 		promptGuidelines: [
 			"Use the job tool for builds, test suites and other slow commands, then keep working on something else; do not sleep or poll to wait for the job.",
+			"When nothing else is left to do while a job runs, end your turn: the job's result arrives as a new message and starts a new turn.",
+			"Do not run a command again with bash while it runs as a job; wait for its result instead.",
 			"Use kill_job to stop a background job you no longer need.",
 		],
 		parameters: bash.parameters,
+		outputSchema: Type.Object({
+			id: Type.String({ description: "Job id, e.g. job-1" }),
+			command: Type.String(),
+		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			uiCtx = ctx;
+			// Fail fast for input the bash tool would reject right away, instead of a "started" result
+			// followed by a failure message that interrupts the agent.
+			validateStart(params, ctx.cwd);
 			const job = start(params, ctx);
 			return {
 				content: [
@@ -336,6 +372,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 					},
 				],
 				details: { id: job.id },
+				structuredContent: { id: job.id, command: job.command },
 			};
 		},
 	});
@@ -349,12 +386,14 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		parameters: Type.Object({
 			id: Type.String({ description: "Job id returned by the job tool, e.g. job-1" }),
 		}),
+		outputSchema: KILL_JOB_OUTPUT,
 		async execute(_toolCallId, { id }, _signal, _onUpdate, ctx) {
 			uiCtx = ctx;
 			const job = jobs.get(id.trim());
 			if (!job) throw new Error(`No running job "${id}".\nRunning jobs:\n${listRunning()}`);
 			const outcome = await kill(job, "agent");
 			if (!outcome) {
+				// An error for the model; scripts still get the data.
 				return {
 					content: [
 						{
@@ -365,12 +404,16 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 						},
 					],
 					details: { id: job.id, exited: false },
+					structuredContent: { id: job.id, exited: false, status: "killing", output: latestText(job) } satisfies KillJobOutput,
 					isError: true,
 				};
 			}
+			const structuredContent: KillJobOutput = { id: job.id, exited: true, status: outcome.status, output: outcome.text };
+			if (outcome.exitCode !== undefined) structuredContent.exit_code = outcome.exitCode;
 			return {
 				content: [{ type: "text", text: `${describeOutcome(job, outcome)}\n\n${outcome.text}` }],
 				details: { id: job.id, exited: true, status: outcome.status, reason: outcome.reason, exitCode: outcome.exitCode },
+				structuredContent,
 			};
 		},
 	});
@@ -515,7 +558,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	function recordInterrupted(job: Job, outcome: JobOutcome | undefined, reason: SessionShutdownEvent["reason"]) {
 		const durationMs = outcome?.durationMs ?? Date.now() - job.startedAt;
 		const header = `Background job ${job.id} was interrupted after ${formatDuration(durationMs)} because ${SHUTDOWN_REASONS[reason] ?? "the session ended"}: ${summarizeCommand(job.command)}`;
-		const latest = job.latest?.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+		const latest = latestText(job);
 		const text = outcome
 			? outcome.text
 			: `${latest || "(no output)"}\n\nThe process did not exit within ${killWaitMs / 1000}s of the kill and may still be running.`;
