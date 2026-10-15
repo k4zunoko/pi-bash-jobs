@@ -58,6 +58,14 @@ Background job job-1 failed (exit 2) after 1m4s: npm test ⏎ npm run lint
 
 Compatibility: fields are only added, not renamed or removed, without a breaking release noted in the [CHANGELOG](CHANGELOG.md); the same holds for `customType` and the header line. Readers should ignore unknown fields and treat unknown `reason` values like `error`. Messages stored by 0.2.0 and earlier have no `reason`, and their header ends with the full command; they still render as before.
 
+## Modes
+
+| Mode | Behavior |
+|---|---|
+| Interactive (`pi`) | The completion interrupts the agent after its current tool batch, or starts a new turn when pi is idle. |
+| RPC (`pi --mode rpc`) | Same as interactive. When pi is idle, the completion starts a new run that the client receives like any other. |
+| Print (`pi -p`) and JSON (`pi --mode json`) | These modes exit when the run settles, which would kill running jobs. Instead, when the model ends its turn while jobs are running, the run waits at its last boundary (`agent_before_settle`) until they finish. Their results reach the model in the same invocation, it continues, and pi exits after that. Jobs that were killed are not waited for. pi waits as long as a job runs, so give commands that might not finish a `timeout`. |
+
 ## Session end
 
 A session runtime ends when pi quits, on `/reload`, and when you switch to a new, resumed or forked session. Running jobs are then killed, and pi waits up to 5 seconds (in total) for them to exit before it continues. Each job gets one message in the conversation of the session that ran it, without waking the agent:

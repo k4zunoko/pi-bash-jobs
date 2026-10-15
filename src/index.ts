@@ -58,6 +58,8 @@ interface Job {
 	startedAt: number;
 	controller: AbortController;
 	done: Promise<JobOutcome>;
+	/** Settles once the completion has been handled (reported, recorded or suppressed). */
+	reported: Promise<void>;
 	/** Latest partial result of the bash tool: the output tail so far and its truncation details. */
 	latest?: AgentToolResult<BashToolDetails | undefined>;
 	/** `killing` once a kill was sent, until the process has exited. */
@@ -273,7 +275,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		job.done = run(job, params, ctx);
 		jobs.set(job.id, job);
 		updateStatus();
-		void job.done
+		job.reported = job.done
 			.then((outcome) => {
 				jobs.delete(job.id);
 				updateStatus();
@@ -454,6 +456,18 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		});
 		row.setExpanded(expanded);
 		return row;
+	});
+
+	// Print and JSON mode (`pi -p`, `pi --mode json`) exit as soon as the run settles, and the
+	// shutdown would kill running jobs before their results reach the model. Hold the run at its last
+	// boundary until the jobs that report to the agent have finished: their steered completion
+	// messages are queued, so pi continues the run with them instead of exiting.
+	pi.on("agent_before_settle", async (_event, ctx) => {
+		if (ctx.mode !== "print" && ctx.mode !== "json") return;
+		// Killed jobs are recorded without waking the agent, so they need no continuation.
+		const waiting = [...jobs.values()].filter((job) => !job.killedBy && !job.silenced);
+		if (waiting.length === 0) return;
+		await Promise.all(waiting.map((job) => job.reported));
 	});
 
 	pi.on("session_start", (_event, ctx) => {
