@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- The README is rewritten as a user guide (quick start, how it works, usage examples, security, FAQ). The full reference (tool errors, completion message fields, rendering, kills, exported API) moved to [docs/reference.md](docs/reference.md), and development, tests and the release steps to [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## [0.3.0] - 2026-10-15
 
 ### Added
