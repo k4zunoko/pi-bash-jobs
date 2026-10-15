@@ -98,10 +98,10 @@ pi install git:github.com/k4zunoko/pi-bash-jobs
 
 Update with `pi update git:github.com/k4zunoko/pi-bash-jobs`. For development, run `pi -ne -e ./src/index.ts` from a clone so the installed copy does not register the same tools twice.
 
-To pin a release, install a tag. Updates then keep that version until you install another tag:
+To pin a release, install one of the [release tags](https://github.com/k4zunoko/pi-bash-jobs/releases) (`v<x.y.z>`). Updates then keep that version until you install another tag:
 
 ```bash
-pi install git:github.com/k4zunoko/pi-bash-jobs@v0.2.0
+pi install git:github.com/k4zunoko/pi-bash-jobs@v<x.y.z>
 ```
 
 Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md).
