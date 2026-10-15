@@ -69,7 +69,7 @@ test("kill_job with an unknown id lists the running jobs", async () => {
 	});
 });
 
-test("session_shutdown aborts every job and suppresses their messages", async () => {
+test("session_shutdown aborts every job and records each one once", async () => {
 	const bash = fakeBash();
 	const { call, emit, sent, statuses } = setup({ createBashTool: bash.factory, ctx: { hasUI: true } });
 	await call("job", { command: "a" });
@@ -78,7 +78,14 @@ test("session_shutdown aborts every job and suppresses their messages", async ()
 	assert.equal((await bash.call(0)).signal.aborted, true);
 	assert.equal((await bash.call(1)).signal.aborted, true);
 	await flush();
-	assert.equal(sent.length, 0);
+	assert.deepEqual(
+		sent.map((s) => [s.message.details.id, s.message.details.reason, s.options]),
+		[
+			["job-1", "interrupted", { triggerTurn: false }],
+			["job-2", "interrupted", { triggerTurn: false }],
+		],
+	);
+	assert.match(sent[0]!.message.content, /^Background job job-1 was interrupted after \d+\.\ds because the session was reloaded: a\n\nCommand aborted$/);
 	assert.equal(statuses.at(-1), undefined);
 });
 

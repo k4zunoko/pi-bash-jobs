@@ -107,17 +107,24 @@ test("kill_job stops the job and reports only in its result", async () => {
 	await assert.rejects(call("kill_job", { id: "job-1" }), /No running job "job-1"/);
 });
 
-test("session_shutdown kills running jobs without a message", async () => {
+test("session_shutdown kills running jobs, waits for them to exit and records them", async () => {
 	const started = marker();
 	const bash = spyBash();
 	const { call, sent, emit } = setup({ createBashTool: bash.factory });
-	await call("job", { command: `: > "${bashPath(started)}"; ${BUSY_LOOP}` });
+	await call("job", { command: `echo before-quit; : > "${bashPath(started)}"; ${BUSY_LOOP}` });
 	await waitFor(() => existsSync(started), "the job to start");
-	await emit("session_shutdown", { reason: "quit" });
-	// The bash tool settles only after the shell process has exited.
-	await within(bash.settled[0]!, "the shell to exit");
+	let exited = false;
+	void bash.settled[0]!.then(() => (exited = true));
+	await within(emit("session_shutdown", { reason: "quit" }), "session_shutdown");
+	// The handler returns only after the shell process has exited (the bash tool settles then).
+	assert.equal(exited, true);
+	assert.equal(sent.length, 1);
+	assert.deepEqual(sent[0]!.options, { triggerTurn: false });
+	assert.equal(sent[0]!.message.details.reason, "interrupted");
+	assert.match(sent[0]!.message.content, /^Background job job-1 was interrupted after \d+\.\ds because pi exited: echo before-quit; /);
+	assert.match(sent[0]!.message.content, /\n\nbefore-quit\n+Command aborted$/);
 	await flush();
-	assert.equal(sent.length, 0);
+	assert.equal(sent.length, 1);
 });
 
 test("a multi-line command with blank lines renders no command fragments as output", async () => {
