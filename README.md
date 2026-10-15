@@ -29,6 +29,35 @@ A job killed by the agent is reported only in the `kill_job` result (no extra me
 
 The footer shows `jobs: N running` while jobs are active.
 
+## Completion message
+
+A finished job is added to the conversation as a custom message with `customType: "bash-jobs"`. Its `content` is what the model reads:
+
+```text
+Background job job-1 failed (exit 2) after 1m4s: npm test ⏎ npm run lint
+
+<output of the bash tool: the last 2000 lines / 50KB, a truncation note with the full output path, and the status line>
+```
+
+- The first line is the header, and it is always one line. The command in it is a summary: lines joined with ` ⏎ `, cut to 80 characters with `…`. A blank line separates it from the output.
+- The header says how the job ended: `finished`, `failed (exit N)`, `timed out after … (timeout Ns)`, `was killed`, or `failed` (the command could not run, for example a spawn error). Durations read `12.3s`, `1m4s`, `1h2m5s`.
+- The `/jobs` list and the `job` result show the same one-line summary.
+
+`details` has the type `BashJobMessageDetails`, exported from `src/index.ts`:
+
+| Field | Description |
+|---|---|
+| `id` | Job id, for example `job-1`. |
+| `command` | The full command. |
+| `timeout` | The timeout in seconds, if one was given. |
+| `status` | `done` (exit code 0), `failed`, or `killed`. |
+| `reason` | Why the job ended: `exit` (the command exited; see `exitCode`), `timeout`, `aborted` (killed), or `error` (the command could not run). |
+| `exitCode` | Exit code, when the command exited. |
+| `durationMs` | Run time in milliseconds. |
+| `bashDetails` | The bash tool's details: `truncation` and `fullOutputPath` when the output was truncated, also for jobs that timed out or were killed. |
+
+Compatibility: fields are only added, not renamed or removed, without a breaking release noted in the [CHANGELOG](CHANGELOG.md); the same holds for `customType` and the header line. Readers should ignore unknown fields and treat unknown `reason` values like `error`. Messages stored by 0.2.0 and earlier have no `reason`, and their header ends with the full command; they still render as before.
+
 ## Install
 
 ```bash

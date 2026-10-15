@@ -10,6 +10,14 @@ All notable changes to this project are documented here. The format is based on
 
 - `createBashJobs({ createBashTool, killWaitMs })` builds the extension with an injected bash tool definition and kill wait; the default export uses pi's bash tool. Tests use it to simulate processes that do not exit or fail to spawn.
 - Tests for the `/jobs` command, user kills, the footer status, `session_start`, startup errors and concurrent jobs. Tests wait on events or poll with a deadline instead of sleeping a fixed time.
+- `reason` in the completion message details (`exit`, `timeout`, `aborted`, `error`). A timeout reads `timed out after … (timeout Ns)` instead of `failed`.
+- The completion message format is documented in the README.
+
+### Fixed
+
+- A multi-line command with blank lines no longer shows part of the command as output in the completion row. The header, the `/jobs` list and the `job` result show a one-line summary of the command; `details.command` keeps the full command.
+- Durations carry over rounded seconds and show hours (`59.96s` is `1m0s`, not `60.0s`; `2h0m0s`, not `120m0s`).
+- Jobs that time out or are killed after their output was truncated keep the truncation details, so the completion row shows the full output path and the truncation warning.
 
 ## [0.2.0] - 2026-10-14
 
