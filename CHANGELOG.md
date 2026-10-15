@@ -15,6 +15,8 @@ All notable changes to this project are documented here. The format is based on
 - The completion message format is documented in the README.
 - `job` and `kill_job` declare an `outputSchema` and return `structuredContent` (`{ id, command }` and `{ id, exited, status, exit_code?, output }`), so codemode scripts get data instead of text.
 - Prompt guidelines: end the turn when nothing else is left to do while a job runs, and do not rerun a job's command with `bash`.
+- `job` and `kill_job` declare tool annotations (`job`: destructive, open world; `kill_job`: not destructive, idempotent, closed world) for permission extensions.
+- A Security section in the README: jobs bypass `tool_call` guards on `bash` and extensions that replace `bash` (sandbox, SSH, spawn hooks), and how to cover or disable them.
 
 ### Changed
 

@@ -6,7 +6,7 @@ Start a build or test run, keep working on something else, and get the result as
 
 ## Design
 
-- **Execution is pi's own bash tool.** Each job runs through `createBashToolDefinition(cwd, { shellPath, commandPrefix })`, created with the `shellPath` and `shellCommandPrefix` settings the way pi creates the built-in `bash` tool. Shell resolution (Git Bash on Windows, or `shellPath`), the command prefix, `PI_*` environment variables, `timeout`, process-tree kill, output truncation (last 2000 lines / 50KB) and the full-output temp file behave like the built-in `bash` tool. Differences: a job reads the settings when it starts, while the built-in tool reads them when the session starts or reloads; and extensions that guard or replace `bash` do not apply to jobs (see [Limitations](#limitations)).
+- **Execution is pi's own bash tool.** Each job runs through `createBashToolDefinition(cwd, { shellPath, commandPrefix })`, created with the `shellPath` and `shellCommandPrefix` settings the way pi creates the built-in `bash` tool. Shell resolution (Git Bash on Windows, or `shellPath`), the command prefix, `PI_*` environment variables, `timeout`, process-tree kill, output truncation (last 2000 lines / 50KB) and the full-output temp file behave like the built-in `bash` tool. Differences: a job reads the settings when it starts, while the built-in tool reads them when the session starts or reloads; and extensions that guard or replace `bash` do not apply to jobs (see [Security](#security)).
 - **Completion is a steer message.** `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` interrupts a running agent after its current tool batch, or starts a new turn when pi is idle.
 - **Completion is drawn as a bash tool row.** The message renderer returns pi's own `ToolExecutionComponent` for `bash` with the bash tool's renderers, so it looks like a finished `bash` call (`$ command · job-1`, output preview, `Took Ns`, ctrl+o to expand). The row is labeled `Job` (the `job` start row too, and `Kill Job` for `kill_job`), which display extensions use as its title. Display extensions that restyle bash rows by patching `ToolExecutionComponent` apply to it too. Renderers registered with `pi.registerToolRenderer` for `bash` are not consulted, because extensions cannot query that chain.
 - **No interactive shell, no PTY, no persistence.** Jobs live as long as the session runtime. When it ends (quit, `/reload`, or switching to a new, resumed or forked session), running jobs are killed and each one is recorded in the conversation of the session that ran it (see [Session end](#session-end)).
@@ -110,8 +110,19 @@ Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 - Meant for commands that finish on their own (builds, tests). Servers and watchers never complete, so they never notify.
 - Jobs do not survive the session runtime: quitting, `/reload`, and switching to a new, resumed or forked session kill them (see [Session end](#session-end)). If pi itself is killed (for example with `SIGKILL`) or crashes, there is no shutdown: nothing is recorded, and the job's processes may keep running.
-- Extensions that guard the tool named `bash` (permission gates, confirmations) do not see `job`; add it to them if needed.
+- Jobs bypass extensions that guard or replace the `bash` tool (permission gates, sandboxes, remote execution). See [Security](#security).
 - On Windows with Git Bash, killing a job can leave its child processes running (for example `sleep.exe`). MSYS starts children through intermediate processes that exit, so pi's `taskkill /T` cannot reach them. The built-in bash tool shares this behavior when aborted. Jobs that run to completion are not affected.
+
+## Security
+
+`job` runs shell commands with the same power as `bash`, but it is a separate tool and runs pi's bash implementation directly, not through a call to the tool named `bash`. Extensions that protect or redirect `bash` therefore do not cover jobs:
+
+- **Guards on `bash`.** `tool_call` and `tool_result` handlers that check `event.toolName === "bash"`, such as permission gates, confirmations and command filters (pi's `permission-gate.ts` example), never see a job's command. They do see the `job` call itself: extend them to `job` as well, where the command is `event.input.command`, for example `if (event.toolName !== "bash" && event.toolName !== "job") return;`.
+- **Replacements of `bash`.** Extensions that replace the `bash` tool to run commands in an OS sandbox (`examples/extensions/sandbox/`), on a remote host (`ssh.ts`), or with a spawn hook that rewrites the command or environment (`bash-spawn-hook.ts`) do not apply to jobs. A job always runs on the local machine, outside the sandbox, through pi's own bash tool (with the `shellPath` and `shellCommandPrefix` settings, but nothing an extension changed). The model can reach it whenever `job` is active, even without meaning to bypass anything.
+
+If you rely on such an extension, either extend it to `job`, turn the job tools off for a run with `pi --exclude-tools job,kill_job`, or do not load this package in that setup (`pi remove`, or a package entry with `"extensions": []`, see pi's package docs).
+
+The tools declare [annotations](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#tool-exposure) for permission extensions that decide from them: `job` is `destructiveHint: true, openWorldHint: true` (like a shell command), and `kill_job` is `destructiveHint: false, idempotentHint: true, openWorldHint: false`, because it only ends processes that `job` started.
 
 ## Development
 

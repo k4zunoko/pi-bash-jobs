@@ -362,6 +362,9 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	pi.registerTool({
 		name: "job",
 		label: "Job",
+		// Like a shell command: it can change or delete anything and reach the network. Permission
+		// extensions that read annotations confirm it like `bash` (see Security in the README).
+		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 		description:
 			"Start a bash command as a background job and return its job id immediately. " +
 			"When the command finishes, its output (truncated like the bash tool) arrives as a message that interrupts your current work. " +
@@ -402,6 +405,8 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	pi.registerTool({
 		name: "kill_job",
 		label: "Kill Job",
+		// Only ends processes that `job` started (and was allowed to start); repeating it has no further effect.
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		description:
 			"Kill a running background job started with the job tool (including its child processes) and return its output so far. " +
 			`Waits up to ${killWaitMs / 1000}s for the job to exit; if it does not, the result is an error and the output is recorded in the conversation when it exits.`,
