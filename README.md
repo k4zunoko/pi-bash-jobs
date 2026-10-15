@@ -37,6 +37,20 @@ pi install git:github.com/k4zunoko/pi-bash-jobs
 
 Update with `pi update git:github.com/k4zunoko/pi-bash-jobs`. For development, run `pi -ne -e ./src/index.ts` from a clone so the installed copy does not register the same tools twice.
 
+To pin a release, install a tag. Updates then keep that version until you install another tag:
+
+```bash
+pi install git:github.com/k4zunoko/pi-bash-jobs@v0.2.0
+```
+
+Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Compatibility
+
+- **pi 1.1.0 or later.** The completion row uses the `outputPad` and `durationMs` render options added in pi 1.1.0, and the exit code comes from the bash tool's `structuredContent` (pi 0.99.0). Older versions are not tested.
+- The pi packages and `typebox` are `peerDependencies` with a `"*"` range, as pi's [package docs](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md#declare-dependencies) require: pi provides its own copies at runtime and installs packages without peer resolution, so a version range there would not be checked. The minimum version is stated here instead.
+- `engines.node` (`>=22.19.0`) matches pi's own requirement. Development needs it too, because the tests run the `.ts` sources directly with Node's type stripping.
+
 ## Limitations
 
 - Meant for commands that finish on their own (builds, tests). Servers and watchers never complete, so they never notify.
@@ -55,3 +69,11 @@ pi -ne -e ./src/index.ts
 ```
 
 At runtime pi maps `@earendil-works/*` and `typebox` imports to its own copies, so they are peer dependencies.
+
+CI runs the typecheck and the tests on Linux and Windows (Git Bash) for every pull request and push to `main`.
+
+### Releasing
+
+1. Move the `Unreleased` entries in [CHANGELOG.md](CHANGELOG.md) under a new version heading with the date, and set the same `version` in `package.json` (`npm version <x.y.z> --no-git-tag-version` also updates `package-lock.json`). While the version is `0.x`, bump the minor version for breaking changes.
+2. Merge that change into `main`, then tag the merge commit and push the tag: `git tag v<x.y.z> && git push origin v<x.y.z>`.
+3. Create a GitHub Release for the tag with the CHANGELOG section as its notes (`gh release create v<x.y.z> --notes-file <file>`).
