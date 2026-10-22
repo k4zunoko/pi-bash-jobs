@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- A `bash-jobs:status` event on `pi.events` with the number of running jobs that will wake the agent when they end (`waking`) and of killed jobs that have not exited yet (`killing`). It is emitted in every mode whenever a count changes, and at session start and end. Other extensions can use it to tell that an idle pi will continue when a job ends. See [Status event](docs/reference.md#status-event).
+
 ### Changed
 
 - The README is rewritten as a user guide (quick start, how it works, usage examples, security, FAQ). The full reference (tool errors, completion message fields, rendering, kills, exported API) moved to [docs/reference.md](docs/reference.md), and development, tests and the release steps to [CONTRIBUTING.md](CONTRIBUTING.md).

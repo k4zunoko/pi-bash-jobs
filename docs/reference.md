@@ -1,6 +1,6 @@
 # pi-bash-jobs reference
 
-The precise behavior of the tools, the `/jobs` command, the completion message and the job lifecycle. For an overview, installation and security notes, start with the [README](../README.md).
+The precise behavior of the tools, the `/jobs` command, the status event, the completion message and the job lifecycle. For an overview, installation and security notes, start with the [README](../README.md).
 
 ## Contents
 
@@ -12,6 +12,7 @@ The precise behavior of the tools, the `/jobs` command, the completion message a
   - [Annotations](#annotations)
 - [`/jobs` command](#jobs-command)
 - [Footer status](#footer-status)
+- [Status event](#status-event)
 - [Completion message](#completion-message)
   - [Content](#content)
   - [Delivery](#delivery)
@@ -165,7 +166,32 @@ Argument completion offers `list` at all times, and `show <id>`, `kill <id>` and
 
 ## Footer status
 
-While jobs are active, the footer shows `jobs: 2 running`, `jobs: 1 running, 1 killing` or `jobs: 1 killing`. It is cleared when no job is left. The status appears only in modes with a UI.
+While jobs are active, the footer shows `jobs: 2 running`, `jobs: 1 running, 1 killing` or `jobs: 1 killing`. It is cleared when no job is left. The status appears only in modes with a UI. Other extensions can follow the counts through the [status event](#status-event).
+
+## Status event
+
+Other extensions can follow the jobs through pi's shared event bus. pi-bash-jobs emits `bash-jobs:status` on `pi.events` with the current counts:
+
+```ts
+pi.events.on("bash-jobs:status", (data) => {
+	const { waking, killing } = data as { waking: number; killing: number };
+	// waking > 0: pi continues on its own when one of these jobs ends, even if it is idle now.
+});
+```
+
+| Field | Description |
+|---|---|
+| `waking` | Running jobs whose end wakes the agent: the completion message interrupts the running agent, or starts a new turn when pi is idle (see [Delivery](#delivery)). Killed jobs are not counted. |
+| `killing` | Jobs that were killed (with `kill_job`, `/jobs kill`, or by the [session end](#session-end-and-job-ids)) and have not exited yet. Their end does not wake the agent. |
+
+The data has the type `BashJobsStatus`, exported from [`src/index.ts`](../src/index.ts).
+
+- **Every event carries both counts in full,** not a change. Events with the same counts can repeat; the latest one is current.
+- **It is emitted** at `session_start`, when a job starts, when a kill is sent, when a job ends, and at `session_shutdown`: when the running jobs are killed (they stop counting as `waking`), again each time one of them exits within the wait, and with both counts at 0 after they are recorded.
+- **In every mode,** with or without a UI.
+- **At a job's end, the event comes first,** then the completion message, which starts the new turn. So `waking` can drop to 0 shortly before pi starts working again.
+- **The counts cover the current session runtime.** After `/reload` or a session switch, the new runtime emits again at its `session_start`.
+- **Compatibility.** The event name and the meaning of `waking` and `killing` are a public contract. Fields are only added, not renamed, removed or given a new meaning, without a breaking release noted in the [CHANGELOG](../CHANGELOG.md). Listeners should ignore unknown fields.
 
 ## Completion message
 
@@ -289,5 +315,6 @@ The package is installed by pi from git and is not published to npm. Its entry p
 | `summarizeCommand(command, max = 80)` | The one-line command summary used in headers and lists. |
 | `formatDuration(ms)` | The duration format used in headers and lists. |
 | `BashJobMessageDetails` | Type of the completion message `details`. |
+| `BashJobsStatus` | Type of the [status event](#status-event) data. |
 | `JobEndReason` | `"exit" \| "timeout" \| "aborted" \| "error" \| "interrupted"`. |
 | `BashJobsOptions`, `BashToolFactory` | Types of the `createBashJobs` options. |

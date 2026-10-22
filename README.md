@@ -209,6 +209,8 @@ Background job job-1 failed (exit 2) after 1m4s: npm test ⏎ npm run lint
 
 > [!NOTE]
 > **For extension authors:** the message has `customType: "bash-jobs"`, and its `details` (type `BashJobMessageDetails`, exported from [`src/index.ts`](src/index.ts)) carry the id, full command, timeout, `status`, `reason`, exit code, duration and the bash tool's truncation details. Fields are only added, not renamed or removed, without a breaking release noted in the [CHANGELOG](CHANGELOG.md); the same holds for `customType` and the header line. See the [field list and compatibility rules](docs/reference.md#completion-message).
+>
+> To follow the jobs from another extension, for example to tell that an idle pi will continue when a job ends, listen to the `bash-jobs:status` event on `pi.events`. It carries the number of jobs that will wake the agent and of jobs being killed, in every mode. See [Status event](docs/reference.md#status-event).
 
 ## Modes
 
@@ -383,7 +385,7 @@ For development, run `pi -ne -e ./src/index.ts` from a clone, so the installed c
 
 | Document | Contents |
 |---|---|
-| [docs/reference.md](docs/reference.md) | Full reference: tool parameters and errors, `/jobs`, the completion message fields, rendering, kills, session end, exported API |
+| [docs/reference.md](docs/reference.md) | Full reference: tool parameters and errors, `/jobs`, the status event, the completion message fields, rendering, kills, session end, exported API |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, tests, CI and the release process |
 | [CHANGELOG.md](CHANGELOG.md) | Releases and breaking changes |
 
