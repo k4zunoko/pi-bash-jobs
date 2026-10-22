@@ -187,7 +187,7 @@ pi.events.on("bash-jobs:status", (data) => {
 The data has the type `BashJobsStatus`, exported from [`src/index.ts`](../src/index.ts).
 
 - **Every event carries both counts in full,** not a change. Events with the same counts can repeat; the latest one is current.
-- **It is emitted** at `session_start`, when a job starts, when a kill is sent, when a job ends, and twice at `session_shutdown`: when the running jobs are killed (they stop counting as `waking`), and with both counts at 0 after they are recorded.
+- **It is emitted** at `session_start`, when a job starts, when a kill is sent, when a job ends, and at `session_shutdown`: when the running jobs are killed (they stop counting as `waking`), again each time one of them exits within the wait, and with both counts at 0 after they are recorded.
 - **In every mode,** with or without a UI.
 - **At a job's end, the event comes first,** then the completion message, which starts the new turn. So `waking` can drop to 0 shortly before pi starts working again.
 - **The counts cover the current session runtime.** After `/reload` or a session switch, the new runtime emits again at its `session_start`.
