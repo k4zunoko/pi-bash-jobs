@@ -50,6 +50,7 @@ pi -ne -e ./src/index.ts
 | `test/security.test.ts` | Refusing jobs when `bash` is replaced, annotations, a `tool_call` guard extended to `job` |
 | `test/lifecycle.test.ts` | Job ids across runtimes, the bounded shutdown wait, report failures |
 | `test/print-mode.test.ts` | Print and JSON mode waiting at `agent_before_settle` |
+| `test/status-event.test.ts` | The `bash-jobs:status` event, also through a real pi runtime in interactive mode |
 | `test/session.e2e.test.ts` | Reload, quit and resume, and session replacement through a real pi runtime |
 | `test/print.e2e.test.ts` | Print and RPC mode through a real pi runtime |
 

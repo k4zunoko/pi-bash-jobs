@@ -29,6 +29,8 @@ import { type Static, Type } from "typebox";
 
 const MESSAGE_TYPE = "bash-jobs";
 const STATUS_KEY = "bash-jobs";
+/** The `pi.events` channel of the job counts. See "Status event" in docs/reference.md. */
+const STATUS_EVENT = "bash-jobs:status";
 const TUI_CAPTURE_KEY = "bash-jobs:tui";
 const KILL_WAIT_MS = 5_000;
 /** Tools whose results carry a job id in `details.id`. */
@@ -159,6 +161,17 @@ interface Job {
 	killWaitTimedOut?: boolean;
 	/** Suppress the completion message (session is shutting down). */
 	silenced?: boolean;
+}
+
+/** Whether the job's end wakes the agent: kills are recorded without waking it, and the session end replaces the message. */
+const wakesAgent = (job: Job) => !job.killedBy && !job.silenced;
+
+/** Data of the `bash-jobs:status` event on `pi.events`. See "Status event" in docs/reference.md. */
+export interface BashJobsStatus {
+	/** Running jobs whose end wakes the agent: it is interrupted, or a new turn starts when pi is idle. */
+	waking: number;
+	/** Jobs that were killed (also by the session end) and have not exited yet; their end does not wake the agent. */
+	killing: number;
 }
 
 /** `details` of the `bash-jobs` completion message. See "Completion message" in the README. */
@@ -302,14 +315,19 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 		}
 	};
 
-	const updateStatus = () =>
+	/** Publish the job counts: to other extensions in every mode, and in the footer when there is a UI. */
+	const updateStatus = () => {
+		const all = [...jobs.values()];
+		const waking = all.filter(wakesAgent).length;
+		const status: BashJobsStatus = { waking, killing: all.length - waking };
+		pi.events.emit(STATUS_EVENT, status);
 		safeUi((ctx) => {
-			const all = [...jobs.values()];
 			const killing = all.filter((j) => j.state === "killing").length;
 			const running = all.length - killing;
 			const parts = [running > 0 ? `${running} running` : "", killing > 0 ? `${killing} killing` : ""].filter(Boolean);
 			ctx.ui.setStatus(STATUS_KEY, parts.length > 0 ? `jobs: ${parts.join(", ")}` : undefined);
 		});
+	};
 
 	const listRunning = () => (jobs.size === 0 ? "No running jobs." : [...jobs.values()].map(runningLine).join("\n"));
 
@@ -660,7 +678,7 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 	pi.on("agent_before_settle", async (_event, ctx) => {
 		if (ctx.mode !== "print" && ctx.mode !== "json") return;
 		// Killed jobs are recorded without waking the agent, so they need no continuation.
-		const waiting = [...jobs.values()].filter((job) => !job.killedBy && !job.silenced);
+		const waiting = [...jobs.values()].filter(wakesAgent);
 		if (waiting.length === 0) return;
 		await Promise.all(waiting.map((job) => job.reported));
 	});
@@ -702,6 +720,8 @@ function registerBashJobs(pi: ExtensionAPI, createBashTool: BashToolFactory, kil
 			job.silenced = true;
 			job.controller.abort();
 		}
+		// The jobs no longer wake the agent.
+		updateStatus();
 		// Wait (bounded) for the processes to exit, so the record has their output and the next
 		// runtime does not start while they are still being torn down.
 		const outcomes = new Map<Job, JobOutcome>();

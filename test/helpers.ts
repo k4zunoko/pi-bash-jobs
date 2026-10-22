@@ -1,5 +1,5 @@
 /**
- * Test harness: a fake pi ExtensionAPI that records registrations, messages and UI calls, plus a
+ * Test harness: a fake pi ExtensionAPI that records registrations, messages, events and UI calls, plus a
  * controllable fake bash tool for paths that real processes cannot reproduce reliably.
  */
 import { createBashToolDefinition, type BashToolOptions } from "@earendil-works/pi-coding-agent";
@@ -53,11 +53,14 @@ export function setup(options: SetupOptions = {}) {
 	const notifications: Array<{ message: string; level: string }> = [];
 	const statuses: Array<string | undefined> = [];
 	const widgets: Array<{ key: string; factory: unknown }> = [];
+	/** Data emitted on `pi.events`, by channel. */
+	const events: Array<{ channel: string; data: unknown }> = [];
 	const pi = {
 		registerTool: (t: any) => tools.set(t.name, t),
 		registerCommand: (name: string, c: any) => commands.set(name, c),
 		registerMessageRenderer: (type: string, r: any) => renderers.set(type, r),
 		on: (name: string, fn: Function) => handlers.set(name, fn),
+		events: { emit: (channel: string, data: unknown) => events.push({ channel, data }), on: () => () => {} },
 		...(options.settings
 			? { getSettings: () => (typeof options.settings === "function" ? options.settings() : { ...options.settings }) }
 			: {}),
@@ -86,7 +89,7 @@ export function setup(options: SetupOptions = {}) {
 	const emit = (name: string, event: unknown = {}) => handlers.get(name)!({ type: name, ...(event as object) }, ctx);
 	/** The `index`-th message sent (0-based), waiting for it if needed. */
 	const message = (index = 0) => waitFor(() => sent[index], `message #${index}`);
-	return { ctx, tools, commands, renderers, handlers, sent, notifications, statuses, widgets, call, command, complete, emit, message };
+	return { ctx, tools, commands, renderers, handlers, sent, notifications, statuses, widgets, events, call, command, complete, emit, message };
 }
 
 export const text = (r: any) => r.content.map((c: any) => c.text).join("");
